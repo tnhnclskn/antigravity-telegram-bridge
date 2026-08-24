@@ -1,0 +1,16 @@
+venv/
+.env
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/attachments/*
+!data/attachments/.gitkeep
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+.DS_Store
+*.swp
+

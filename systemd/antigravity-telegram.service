@@ -1,0 +1,19 @@
+[Unit]
+Description=Antigravity CLI Telegram Bridge Daemon
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/antigravity-telegram-bridge
+EnvironmentFile=-/root/antigravity-telegram-bridge/.env
+Environment=PYTHONUNBUFFERED=1
+Environment="PATH=/root/antigravity-telegram-bridge/venv/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/root/antigravity-telegram-bridge/venv/bin/python3 /root/antigravity-telegram-bridge/main.py
+Restart=always
+RestartSec=5s
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

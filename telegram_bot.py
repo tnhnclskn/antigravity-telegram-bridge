@@ -1,0 +1,665 @@
+"""
+Telegram Bot handlers and routing for Antigravity Bridge.
+Manages conversations, streaming feedback, media handling, and admin controls.
+"""
+
+import asyncio
+import logging
+import os
+import shutil
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional, Dict, Any, List
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    constants
+)
+from telegram.constants import ParseMode, ChatAction
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters
+)
+
+from config import settings
+from database import db
+from agy_client import agy_client
+from formatter import (
+    markdown_to_telegram_html,
+    split_text_chunks,
+    format_tool_status,
+    format_stats_footer,
+    escape_html
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------- Security & Auth Decorator ---------------- #
+
+def authorized_only(func):
+    """Decorator to ensure only whitelisted users can use bot features."""
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user = update.effective_user
+        if not user:
+            return
+
+        user_id = user.id
+        is_allowed = await db.is_whitelisted(user_id)
+
+        # Check if first user auto-whitelisting is triggered
+        total_whitelisted = await db.count_whitelisted_users()
+        if not is_allowed and total_whitelisted == 0 and settings.AUTO_WHITELIST_FIRST_USER:
+            await db.add_whitelisted_user(
+                user_id=user_id,
+                username=user.username,
+                full_name=user.full_name,
+                role="admin"
+            )
+            is_allowed = True
+            logger.info(f"Auto-whitelisted first user {user_id} (@{user.username}) as Admin.")
+
+        if not is_allowed:
+            logger.warning(f"Unauthorized access attempt from User ID: {user_id} (@{user.username})")
+            if update.message:
+                denied_msg = (
+                    "⛔ <b>Yetkisiz Erişim</b>\n\n"
+                    "Bu bot özel bir <b>Google Antigravity CLI</b> köprüsüdür.\n"
+                    f"Telegram ID'niz: <code>{user_id}</code>\n\n"
+                    "Lütfen sistem yöneticisinden erişim izni talep ediniz."
+                )
+                await update.message.reply_text(denied_msg, parse_mode=ParseMode.HTML)
+            return
+
+        return await func(update, context, *args, **kwargs)
+    return wrapper
+
+
+# ---------------- Command Handlers ---------------- #
+
+@authorized_only
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command."""
+    user = update.effective_user
+    session = await db.get_session(user.id)
+    is_admin = await db.is_admin(user.id)
+
+    conv_id = session.get("conversation_id") or "Yeni Oturum (Henüz başlatılmadı)"
+    model = session.get("model") or settings.DEFAULT_MODEL
+    effort = session.get("effort") or settings.DEFAULT_EFFORT
+    workspace = session.get("workspace") or settings.DEFAULT_WORKSPACE
+
+    welcome_text = (
+        f"🤖 <b>Antigravity CLI Telegram Köprüsüne Hoş Geldiniz!</b>\n\n"
+        f"Merhaba <b>{escape_html(user.first_name)}</b>,\n"
+        f"Doğrudan bu sohbete yazacağınız tüm mesajlar sunucunuzdaki <b>Antigravity CLI (agy)</b> ortamına aktarılır "
+        f"ve yapay zeka yanıtları anlık olarak size iletilir.\n\n"
+        f"📋 <b>Aktif Oturum Bilgileri:</b>\n"
+        f"• <b>Kullanıcı ID:</b> <code>{user.id}</code> {'(👑 Admin)' if is_admin else ''}\n"
+        f"• <b>Model:</b> <code>{escape_html(model)}</code>\n"
+        f"• <b>Düşünme Seviyesi:</b> <code>{escape_html(effort)}</code>\n"
+        f"• <b>Çalışma Dizini:</b> <code>{escape_html(workspace)}</code>\n"
+        f"• <b>Oturum ID:</b> <code>{escape_html(conv_id)}</code>\n\n"
+        f"💡 <i>Hemen bir soru sorabilir, kod yazdırabilir veya komut verebilirsiniz.</i>"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🆕 Yeni Oturum", callback_data="cmd_new"),
+            InlineKeyboardButton("⚙️ Durum", callback_data="cmd_status"),
+        ],
+        [
+            InlineKeyboardButton("🧠 Model Seç", callback_data="cmd_models"),
+            InlineKeyboardButton("🎯 Düşünme Seviyesi", callback_data="cmd_efforts"),
+        ],
+        [
+            InlineKeyboardButton("📖 Yardım & Komutlar", callback_data="cmd_help")
+        ]
+    ]
+
+    await update.message.reply_text(
+        welcome_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+@authorized_only
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /help command."""
+    help_text = (
+        "📚 <b>Antigravity Telegram Köprüsü Komut Kılavuzu</b>\n\n"
+        "<b>Temel Komutlar:</b>\n"
+        "• <code>/start</code> - Başlangıç ekranı ve oturum özeti\n"
+        "• <code>/new</code>, <code>/reset</code> - Mevcut sohbet bağlamını sıfırlar ve yeni oturum açar\n"
+        "• <code>/status</code> - Aktif oturum, model, sunucu ve sistem kaynak durumu\n"
+        "• <code>/stop</code>, <code>/cancel</code> - Çalışan Antigravity sürecini durdurur\n"
+        "• <code>/model [isim]</code> - Kullanılan yapay zeka modelini görüntüler veya değiştirir\n"
+        "• <code>/effort [low|medium|high]</code> - Düşünme / Akıl yürütme seviyesini ayarlar\n"
+        "• <code>/workspace [yol]</code> - Antigravity çalışma dizinini görüntüler veya ayarlar\n"
+        "• <code>/permissions [on|off]</code> - Otonom araç çalıştırma onayını açar/kapatır\n"
+        "• <code>/history</code> - Son konuşma geçmişini listeler\n\n"
+        "<b>Yönetici Komutları (Admin):</b>\n"
+        "• <code>/whitelist list</code> - İzinli kullanıcıları listeler\n"
+        "• <code>/whitelist add &lt;id&gt; [isim]</code> - Yeni kullanıcıya izin verir\n"
+        "• <code>/whitelist remove &lt;id&gt;</code> - Kullanıcı iznini kaldırır\n\n"
+        "📸 <b>Medya Desteği:</b>\n"
+        "Fotoğraf, kod dosyası veya belge gönderdiğinizde otomatik olarak çalışma alanına kaydedilir ve agy'ye aktarılır."
+    )
+    if update.message:
+        await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(help_text, parse_mode=ParseMode.HTML)
+
+
+@authorized_only
+async def new_session_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reset conversation and start a new session."""
+    user = update.effective_user
+    await db.reset_session(user.id)
+    msg = "🔄 <b>Sohbet oturumu sıfırlandı!</b>\nYeni bir Antigravity konuşması başlatıldı."
+    if update.message:
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    elif update.callback_query:
+        await update.callback_query.answer("Oturum sıfırlandı!")
+        await update.callback_query.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+
+@authorized_only
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel currently running task."""
+    user = update.effective_user
+    cancelled = agy_client.cancel_task(user.id)
+    if cancelled:
+        await update.message.reply_text("🛑 <b>Çalışan görev iptal edildi.</b>", parse_mode=ParseMode.HTML)
+    else:
+        await update.message.reply_text("ℹ️ Şu anda çalışan aktif bir görev bulunmuyor.", parse_mode=ParseMode.HTML)
+
+
+@authorized_only
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Display detailed status card."""
+    user = update.effective_user
+    session = await db.get_session(user.id)
+
+    # Disk & System info
+    total, used, free = shutil.disk_usage("/")
+    free_gb = free // (2**30)
+    total_gb = total // (2**30)
+
+    conv_id = session.get("conversation_id") or "Yok (İlk mesajda oluşturulacak)"
+    model = session.get("model") or settings.DEFAULT_MODEL
+    effort = session.get("effort") or settings.DEFAULT_EFFORT
+    workspace = session.get("workspace") or settings.DEFAULT_WORKSPACE
+    auto_approve = "Açık (Otonom)" if session.get("auto_approve") else "Kapalı"
+
+    status_text = (
+        "📊 <b>Antigravity Köprüsü Sistem Durumu</b>\n\n"
+        f"👤 <b>Kullanıcı:</b> {escape_html(user.full_name)} (<code>{user.id}</code>)\n"
+        f"🤖 <b>Aktif Model:</b> <code>{escape_html(model)}</code>\n"
+        f"🧠 <b>Düşünme Seviyesi:</b> <code>{escape_html(effort)}</code>\n"
+        f"📂 <b>Çalışma Alanı:</b> <code>{escape_html(workspace)}</code>\n"
+        f"🛡 <b>Otonom Onay:</b> {auto_approve}\n"
+        f"💬 <b>Aktif Oturum UUID:</b> <code>{escape_html(conv_id)}</code>\n"
+        f"💾 <b>Sunucu Diski:</b> {free_gb} GB boş / {total_gb} GB toplam\n"
+        f"⚡ <b>CLI Yolu:</b> <code>{escape_html(settings.AGY_BIN_PATH)}</code>"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Sıfırla", callback_data="cmd_new"),
+            InlineKeyboardButton("🧠 Model Değiştir", callback_data="cmd_models"),
+        ]
+    ]
+
+    if update.message:
+        await update.message.reply_text(status_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(status_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@authorized_only
+async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """View or switch model."""
+    user = update.effective_user
+    args = context.args
+
+    if args:
+        new_model = args[0].strip()
+        await db.update_session(user.id, model=new_model)
+        await update.message.reply_text(
+            f"✅ <b>Model değiştirildi:</b> <code>{escape_html(new_model)}</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    # If no args, show interactive selector
+    models = await agy_client.get_available_models()
+    session = await db.get_session(user.id)
+    current_model = session.get("model", settings.DEFAULT_MODEL)
+
+    keyboard = []
+    for m in models:
+        prefix = "✅ " if m == current_model else ""
+        keyboard.append([InlineKeyboardButton(f"{prefix}{m}", callback_data=f"set_model:{m}")])
+
+    text = f"🤖 <b>Kullanılabilir Modeller</b>\nŞu anki model: <code>{escape_html(current_model)}</code>\n\nAşağıdan seçim yapabilirsiniz:"
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@authorized_only
+async def effort_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """View or switch reasoning effort."""
+    user = update.effective_user
+    args = context.args
+
+    if args:
+        new_effort = args[0].strip().lower()
+        if new_effort not in ("low", "medium", "high"):
+            await update.message.reply_text("❌ Geçersiz seviye. Seçenekler: <code>low</code>, <code>medium</code>, <code>high</code>", parse_mode=ParseMode.HTML)
+            return
+        await db.update_session(user.id, effort=new_effort)
+        await update.message.reply_text(f"✅ <b>Düşünme seviyesi ayarlandı:</b> <code>{new_effort}</code>", parse_mode=ParseMode.HTML)
+        return
+
+    session = await db.get_session(user.id)
+    current = session.get("effort", settings.DEFAULT_EFFORT)
+    keyboard = [
+        [
+            InlineKeyboardButton(f"{'✅ ' if current == 'high' else ''}High (Derin Akıl Yürütme)", callback_data="set_effort:high"),
+        ],
+        [
+            InlineKeyboardButton(f"{'✅ ' if current == 'medium' else ''}Medium (Dengeli)", callback_data="set_effort:medium"),
+        ],
+        [
+            InlineKeyboardButton(f"{'✅ ' if current == 'low' else ''}Low (Hızlı)", callback_data="set_effort:low"),
+        ]
+    ]
+    await update.message.reply_text("🎯 <b>Düşünme Seviyesi (Reasoning Effort) Seçin:</b>", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@authorized_only
+async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """View or set workspace directory."""
+    user = update.effective_user
+    args = context.args
+
+    if args:
+        target_dir = os.path.abspath(args[0].strip())
+        if not os.path.isdir(target_dir):
+            await update.message.reply_text(f"❌ Dizin bulunamadı: <code>{escape_html(target_dir)}</code>", parse_mode=ParseMode.HTML)
+            return
+        await db.update_session(user.id, workspace=target_dir)
+        await update.message.reply_text(f"✅ <b>Çalışma dizini güncellendi:</b> <code>{escape_html(target_dir)}</code>", parse_mode=ParseMode.HTML)
+        return
+
+    session = await db.get_session(user.id)
+    current_ws = session.get("workspace", settings.DEFAULT_WORKSPACE)
+    await update.message.reply_text(
+        f"📂 <b>Mevcut Çalışma Alanı:</b> <code>{escape_html(current_ws)}</code>\n\n"
+        f"Değiştirmek için: <code>/workspace &lt;dizin_yolu&gt;</code>",
+        parse_mode=ParseMode.HTML
+    )
+
+
+@authorized_only
+async def permissions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Toggle auto-approve permissions."""
+    user = update.effective_user
+    args = context.args
+
+    session = await db.get_session(user.id)
+    current = bool(session.get("auto_approve", 1))
+
+    if args:
+        val = args[0].lower() in ("on", "1", "true", "evet", "acik", "açık")
+        await db.update_session(user.id, auto_approve=1 if val else 0)
+        state_str = "Açık (Otonom Araç Çalıştırma)" if val else "Kapalı"
+        await update.message.reply_text(f"🛡 <b>Otonom Onay:</b> {state_str}", parse_mode=ParseMode.HTML)
+        return
+
+    # Toggle
+    new_val = not current
+    await db.update_session(user.id, auto_approve=1 if new_val else 0)
+    state_str = "Açık (Otonom Araç Çalıştırma)" if new_val else "Kapalı"
+    await update.message.reply_text(f"🛡 <b>Otonom Onay durumu değiştirildi:</b> {state_str}", parse_mode=ParseMode.HTML)
+
+
+@authorized_only
+async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """View recent message history."""
+    user = update.effective_user
+    history = await db.get_history(user.id, limit=6)
+    if not history:
+        await update.message.reply_text("📜 Henüz bir sohbet geçmişi kaydedilmemiş.", parse_mode=ParseMode.HTML)
+        return
+
+    lines = ["📜 <b>Son Sohbet Geçmişi:</b>\n"]
+    for item in history:
+        role_icon = "👤 <b>Siz:</b>" if item["role"] == "user" else "🤖 <b>Yaver AI:</b>"
+        snippet = item["content"][:120].replace("\n", " ")
+        if len(item["content"]) > 120:
+            snippet += "..."
+        lines.append(f"{role_icon} {escape_html(snippet)}")
+
+    await update.message.reply_text("\n\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+@authorized_only
+async def whitelist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin whitelist management."""
+    user = update.effective_user
+    if not await db.is_admin(user.id):
+        await update.message.reply_text("⛔ Bu komutu sadece bot yöneticileri kullanabilir.", parse_mode=ParseMode.HTML)
+        return
+
+    args = context.args
+    if not args or args[0] == "list":
+        users = await db.get_whitelisted_users()
+        msg_lines = ["📋 <b>İzinli Kullanıcılar:</b>\n"]
+        for u in users:
+            admin_badge = "👑 Admin" if u.get("role") == "admin" else "👤 Kullanıcı"
+            name = u.get("full_name") or u.get("username") or "Bilinmiyor"
+            msg_lines.append(f"• <code>{u['user_id']}</code> - {escape_html(name)} ({admin_badge})")
+        await update.message.reply_text("\n".join(msg_lines), parse_mode=ParseMode.HTML)
+        return
+
+    action = args[0].lower()
+    if action == "add" and len(args) >= 2:
+        try:
+            target_id = int(args[1])
+            target_name = args[2] if len(args) > 2 else None
+            await db.add_whitelisted_user(target_id, full_name=target_name, added_by=user.id)
+            await update.message.reply_text(f"✅ Kullanıcı <code>{target_id}</code> izin listesine eklendi.", parse_mode=ParseMode.HTML)
+        except ValueError:
+            await update.message.reply_text("❌ Geçersiz kullanıcı ID'si.", parse_mode=ParseMode.HTML)
+    elif action == "remove" and len(args) >= 2:
+        try:
+            target_id = int(args[1])
+            await db.remove_whitelisted_user(target_id)
+            await update.message.reply_text(f"🗑 Kullanıcı <code>{target_id}</code> listeden çıkarıldı.", parse_mode=ParseMode.HTML)
+        except ValueError:
+            await update.message.reply_text("❌ Geçersiz kullanıcı ID'si.", parse_mode=ParseMode.HTML)
+    else:
+        await update.message.reply_text(
+            "ℹ️ <b>Kullanım:</b>\n"
+            "• <code>/whitelist list</code>\n"
+            "• <code>/whitelist add &lt;id&gt; [isim]</code>\n"
+            "• <code>/whitelist remove &lt;id&gt;</code>",
+            parse_mode=ParseMode.HTML
+        )
+
+
+# ---------------- Callback Queries ---------------- #
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle interactive inline keyboard clicks."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    user_id = query.from_user.id
+    if not await db.is_whitelisted(user_id):
+        await query.message.reply_text("⛔ Yetkiniz bulunmuyor.")
+        return
+
+    data = query.data or ""
+    if data == "cmd_new":
+        await db.reset_session(user_id)
+        await query.edit_message_text("🔄 <b>Yeni oturum başlatıldı!</b>", parse_mode=ParseMode.HTML)
+    elif data == "cmd_status":
+        await status_command(update, context)
+    elif data == "cmd_help":
+        await help_command(update, context)
+    elif data == "cmd_models":
+        models = await agy_client.get_available_models()
+        session = await db.get_session(user_id)
+        current = session.get("model", settings.DEFAULT_MODEL)
+        kb = [[InlineKeyboardButton(f"{'✅ ' if m == current else ''}{m}", callback_data=f"set_model:{m}")] for m in models]
+        await query.message.reply_text("🤖 <b>Model Seçin:</b>", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
+    elif data == "cmd_efforts":
+        session = await db.get_session(user_id)
+        current = session.get("effort", settings.DEFAULT_EFFORT)
+        kb = [
+            [InlineKeyboardButton(f"{'✅ ' if current == 'high' else ''}High (Derin Akıl Yürütme)", callback_data="set_effort:high")],
+            [InlineKeyboardButton(f"{'✅ ' if current == 'medium' else ''}Medium (Dengeli)", callback_data="set_effort:medium")],
+            [InlineKeyboardButton(f"{'✅ ' if current == 'low' else ''}Low (Hızlı)", callback_data="set_effort:low")]
+        ]
+        await query.message.reply_text("🎯 <b>Düşünme Seviyesi Seçin:</b>", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
+    elif data.startswith("set_model:"):
+        model_name = data.split(":", 1)[1]
+        await db.update_session(user_id, model=model_name)
+        await query.edit_message_text(f"✅ <b>Model güncellendi:</b> <code>{escape_html(model_name)}</code>", parse_mode=ParseMode.HTML)
+    elif data.startswith("set_effort:"):
+        effort_name = data.split(":", 1)[1]
+        await db.update_session(user_id, effort=effort_name)
+        await query.edit_message_text(f"✅ <b>Düşünme seviyesi güncellendi:</b> <code>{escape_html(effort_name)}</code>", parse_mode=ParseMode.HTML)
+
+
+# ---------------- Message & Media Handler ---------------- #
+
+async def send_typing_periodically(chat_id: int, bot, stop_event: asyncio.Event):
+    """Send typing chat action every 4 seconds until stop_event is set."""
+    while not stop_event.is_set():
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=4.0)
+        except asyncio.TimeoutError:
+            pass
+
+
+@authorized_only
+async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text, photos, and document messages from authorized users."""
+    message = update.message
+    if not message:
+        return
+
+    user = update.effective_user
+    chat_id = message.chat_id
+    user_id = user.id
+
+    # 1. Extract prompt and handle attachments
+    prompt_text = message.text or message.caption or ""
+    attachment_paths = []
+
+    # Handle Photo
+    if message.photo:
+        photo = message.photo[-1]  # Highest resolution
+        file_obj = await photo.get_file()
+        file_ext = ".jpg"
+        ts = int(time.time())
+        dest_file = settings.ATTACHMENTS_DIR / f"photo_{user_id}_{ts}_{file_obj.file_unique_id}{file_ext}"
+        await file_obj.download_to_drive(dest_file)
+        attachment_paths.append(str(dest_file))
+        logger.info(f"Downloaded photo attachment to {dest_file}")
+
+    # Handle Document
+    if message.document:
+        doc = message.document
+        file_obj = await doc.get_file()
+        filename = doc.file_name or f"doc_{int(time.time())}"
+        dest_file = settings.ATTACHMENTS_DIR / f"{user_id}_{filename}"
+        await file_obj.download_to_drive(dest_file)
+        attachment_paths.append(str(dest_file))
+        logger.info(f"Downloaded document attachment to {dest_file}")
+
+    # Construct final prompt with attachment notes if present
+    if attachment_paths:
+        attachments_note = "\n".join(f"[Attached File: {p}]" for p in attachment_paths)
+        if prompt_text:
+            prompt_text = f"{prompt_text}\n\n{attachments_note}"
+        else:
+            prompt_text = f"Please inspect the attached file(s):\n{attachments_note}"
+
+    if not prompt_text.strip():
+        await message.reply_text("ℹ️ Lütfen bir mesaj veya dosya gönderin.")
+        return
+
+    # 2. Get user session configuration
+    session = await db.get_session(user_id)
+    conversation_id = session.get("conversation_id")
+    model = session.get("model") or settings.DEFAULT_MODEL
+    effort = session.get("effort") or settings.DEFAULT_EFFORT
+    workspace = session.get("workspace") or settings.DEFAULT_WORKSPACE
+    auto_approve = bool(session.get("auto_approve", 1))
+
+    # 3. Send initial progress message & start typing background task
+    status_msg = await message.reply_text(
+        "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(send_typing_periodically(chat_id, context.bot, stop_typing))
+
+    last_edit_time = time.time()
+    last_status_text = ""
+    accumulated_response = ""
+    final_result_data = None
+
+    try:
+        # 4. Stream response from Antigravity CLI
+        async for event in agy_client.run_prompt_stream(
+            user_id=user_id,
+            prompt=prompt_text,
+            conversation_id=conversation_id,
+            workspace=workspace,
+            model=model,
+            effort=effort,
+            auto_approve=auto_approve
+        ):
+            event_type = event.get("type")
+
+            if event_type == "init":
+                new_conv_id = event.get("conversation_id")
+                if new_conv_id and new_conv_id != conversation_id:
+                    conversation_id = new_conv_id
+                    await db.update_session(user_id, conversation_id=new_conv_id)
+
+            elif event_type == "step_update":
+                step_type = event.get("step_type")
+                tool_name = event.get("tool_name")
+                state = event.get("state", "running")
+
+                if tool_name:
+                    tool_args = event.get("tool_info", {}).get("parameters", {})
+                    current_status = format_tool_status(tool_name, tool_args, state)
+                    
+                    # Update status message with debouncing
+                    now = time.time()
+                    if current_status != last_status_text and (now - last_edit_time) >= settings.STREAM_EDIT_INTERVAL:
+                        try:
+                            await status_msg.edit_text(current_status, parse_mode=ParseMode.HTML)
+                            last_status_text = current_status
+                            last_edit_time = now
+                        except Exception:
+                            pass
+
+            elif event_type == "result":
+                final_result_data = event
+                accumulated_response = event.get("response", "")
+                res_conv_id = event.get("conversation_id")
+                if res_conv_id:
+                    conversation_id = res_conv_id
+                    await db.update_session(user_id, conversation_id=res_conv_id)
+
+            elif event_type == "error":
+                err_text = event.get("error", "Bilinmeyen hata")
+                accumulated_response = f"⚠️ <b>Hata:</b>\n<code>{escape_html(err_text)}</code>"
+
+    except Exception as e:
+        logger.exception(f"Error processing prompt for user {user_id}")
+        accumulated_response = f"❌ <b>Bir hata oluştu:</b>\n<code>{escape_html(str(e))}</code>"
+    finally:
+        stop_typing.set()
+        await typing_task
+
+    # 5. Format and deliver the response
+    if not accumulated_response.strip():
+        accumulated_response = "<i>(Antigravity boş yanıt döndürdü)</i>"
+
+    # Save to history
+    await db.add_history(user_id, conversation_id, "user", prompt_text)
+    await db.add_history(user_id, conversation_id, "assistant", accumulated_response)
+
+    # Convert markdown to Telegram HTML
+    formatted_html = markdown_to_telegram_html(accumulated_response)
+
+    # Add footer if stats are available
+    if final_result_data:
+        duration = final_result_data.get("duration_seconds", 0.0)
+        usage = final_result_data.get("usage")
+        footer = format_stats_footer(duration, usage)
+        formatted_html += f"\n\n<blockquote>{escape_html(footer)}</blockquote>"
+
+    # Split into message chunks safe for Telegram (<= 3800 chars)
+    chunks = split_text_chunks(formatted_html, max_chars=settings.MAX_TELEGRAM_MESSAGE_LEN)
+
+    # Send or edit first chunk
+    try:
+        if chunks:
+            await status_msg.edit_text(chunks[0], parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            for subsequent_chunk in chunks[1:]:
+                await message.reply_text(subsequent_chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+    except Exception as e:
+        logger.warning(f"HTML send failed, falling back to plain text: {e}")
+        # Fallback to plain text if HTML parsing failed
+        plain_chunks = split_text_chunks(accumulated_response, max_chars=settings.MAX_TELEGRAM_MESSAGE_LEN)
+        try:
+            await status_msg.edit_text(plain_chunks[0])
+            for ch in plain_chunks[1:]:
+                await message.reply_text(ch)
+        except Exception as fallback_err:
+            logger.error(f"Fallback plain text send also failed: {fallback_err}")
+
+
+# ---------------- Application Setup ---------------- #
+
+def build_application() -> Application:
+    """Build and configure the Telegram Application."""
+    settings.validate()
+
+    application = (
+        Application.builder()
+        .token(settings.TELEGRAM_BOT_TOKEN)
+        .concurrent_updates(True)
+        .build()
+    )
+
+    # Command handlers
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler(["new", "reset", "clear"], new_session_command))
+    application.add_handler(CommandHandler(["cancel", "stop"], cancel_command))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("model", model_command))
+    application.add_handler(CommandHandler("effort", effort_command))
+    application.add_handler(CommandHandler(["workspace", "cwd", "dir"], workspace_command))
+    application.add_handler(CommandHandler(["permissions", "permission", "auto"], permissions_command))
+    application.add_handler(CommandHandler("history", history_command))
+    application.add_handler(CommandHandler("whitelist", whitelist_command))
+
+    # Interactive UI callbacks
+    application.add_handler(CallbackQueryHandler(callback_handler))
+
+    # Message & Media handler
+    application.add_handler(
+        MessageHandler(
+            (filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
+            handle_incoming_message
+        )
+    )
+
+    return application

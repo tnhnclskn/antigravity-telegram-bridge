@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.antigravity.telegram.bridge</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/tnhnclskn/Projects/antigravity-telegram-bridge/venv/bin/python3</string>
+        <string>/Users/tnhnclskn/Projects/antigravity-telegram-bridge/main.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/tnhnclskn/Projects/antigravity-telegram-bridge</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/tnhnclskn/Projects/antigravity-telegram-bridge/bridge.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/tnhnclskn/Projects/antigravity-telegram-bridge/bridge_error.log</string>
+</dict>
+</plist>

@@ -236,6 +236,15 @@ document.addEventListener('DOMContentLoaded', () => {
         // Whitelist Add
         elements.btnAddWhitelist.addEventListener('click', handleAddWhitelist);
 
+        // Logout
+        const btnLogout = document.getElementById('btn-logout');
+        if (btnLogout) {
+            btnLogout.addEventListener('click', async () => {
+                await fetch('/api/auth/logout', { method: 'POST' });
+                window.location.reload();
+            });
+        }
+
         // Quick Chips
         elements.quickChips.forEach(chip => {
             chip.addEventListener('click', () => {

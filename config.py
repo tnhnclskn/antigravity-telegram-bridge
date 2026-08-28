@@ -49,9 +49,9 @@ class Settings:
 
     # WebUI Settings
     WEBUI_HOST: str = os.getenv("WEBUI_HOST", "0.0.0.0").strip()
-    WEBUI_PORT: int = int(os.getenv("WEBUI_PORT", "8000"))
-    WEBUI_AUTH_ENABLED: bool = _get_bool("WEBUI_AUTH_ENABLED", False)
-    WEBUI_PASSWORD: str = os.getenv("WEBUI_PASSWORD", "").strip()
+    WEBUI_PORT: int = int(os.getenv("WEBUI_PORT", "38291"))
+    WEBUI_AUTH_ENABLED: bool = _get_bool("WEBUI_AUTH_ENABLED", True)
+    WEBUI_AUTH_TOKEN: str = os.getenv("WEBUI_AUTH_TOKEN", "").strip()
     WEBUI_TITLE: str = os.getenv("WEBUI_TITLE", "Antigravity Hub").strip()
 
     # Telegram Bot Settings

@@ -1,6 +1,6 @@
 """
 FastAPI Web Server for Antigravity Hub Bridge.
-Provides REST API, Server-Sent Events (SSE) streaming, WebSockets, and WebUI interface.
+Provides REST API, Server-Sent Events (SSE) streaming, WebSockets, Magic Link Auth, and WebUI interface.
 """
 
 import asyncio
@@ -64,34 +64,37 @@ templates = Jinja2Templates(directory=str(settings.TEMPLATES_DIR))
 
 # ---------------- Auth Middleware / Helper ---------------- #
 
-def verify_web_auth(request: Request) -> bool:
-    """Verify web authorization if WEBUI_AUTH_ENABLED is True."""
-    if not settings.WEBUI_AUTH_ENABLED or not settings.WEBUI_PASSWORD:
+def is_authenticated(request: Request) -> bool:
+    """Verify if request has valid token via query param, cookie or Authorization header."""
+    if not settings.WEBUI_AUTH_ENABLED or not settings.WEBUI_AUTH_TOKEN:
         return True
-    
-    # Check session cookie
+
+    # 1. Query parameter (?token=... or ?key=...)
+    query_token = request.query_params.get("token") or request.query_params.get("key")
+    if query_token and query_token == settings.WEBUI_AUTH_TOKEN:
+        return True
+
+    # 2. Cookie (hub_auth)
     auth_cookie = request.cookies.get("hub_auth")
-    if auth_cookie == settings.WEBUI_PASSWORD:
+    if auth_cookie and auth_cookie == settings.WEBUI_AUTH_TOKEN:
         return True
-    
-    # Check Authorization header (Bearer or Basic)
+
+    # 3. Authorization Header (Bearer <token>)
     auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.replace("Bearer ", "").strip() == settings.WEBUI_PASSWORD:
-        return True
-    
-    # Check query param
-    if request.query_params.get("key") == settings.WEBUI_PASSWORD:
-        return True
+    if auth_header:
+        header_token = auth_header.replace("Bearer ", "").strip()
+        if header_token == settings.WEBUI_AUTH_TOKEN:
+            return True
 
     return False
 
 
 def require_auth(request: Request):
-    """Dependency to enforce web auth."""
-    if not verify_web_auth(request):
+    """Dependency to enforce web token authentication."""
+    if not is_authenticated(request):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required. Please provide a valid key or login."
+            detail="Yetkilendirme gerekli. Lütfen geçerli bir token veya magic link ile giriş yapın."
         )
 
 
@@ -123,21 +126,48 @@ class WhitelistAddRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    password: str
+    token: Optional[str] = None
+    password: Optional[str] = None
 
 
-# ---------------- Frontend Route ---------------- #
+# ---------------- Frontend Route with Magic Link ---------------- #
 
 @app.get("/", response_class=HTMLResponse)
-async def serve_index(request: Request):
-    """Render the main WebUI Dashboard."""
-    if settings.WEBUI_AUTH_ENABLED and settings.WEBUI_PASSWORD and not verify_web_auth(request):
-        tpl_name = "login.html" if (settings.TEMPLATES_DIR / "login.html").exists() else "index.html"
+async def serve_index(
+    request: Request,
+    token: Optional[str] = None,
+    key: Optional[str] = None
+):
+    """
+    Render the main WebUI Dashboard or Login screen.
+    Supports instant Magic Link authentication via ?token=... query parameter.
+    """
+    magic_token = (token or key or "").strip()
+
+    # Magic link authentication: if token in URL matches, set cookie and redirect to clean root
+    if magic_token and settings.WEBUI_AUTH_ENABLED and settings.WEBUI_AUTH_TOKEN:
+        if magic_token == settings.WEBUI_AUTH_TOKEN:
+            redirect_resp = RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+            redirect_resp.set_cookie(
+                key="hub_auth",
+                value=magic_token,
+                httponly=True,
+                samesite="lax",
+                max_age=86400 * 30
+            )
+            return redirect_resp
+
+    if settings.WEBUI_AUTH_ENABLED and not is_authenticated(request):
         return templates.TemplateResponse(
             request=request,
-            name=tpl_name,
-            context={"title": settings.WEBUI_TITLE, "auth_required": True}
+            name="login.html",
+            context={
+                "title": settings.WEBUI_TITLE,
+                "auth_required": True,
+                "error": "Geçersiz erişim tokeni" if magic_token else None
+            }
         )
+
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -151,11 +181,43 @@ async def serve_index(request: Request):
     )
 
 
+# ---------------- Auth REST Endpoints ---------------- #
+
+@app.post("/api/auth/login")
+async def login(req: LoginRequest, response: Response):
+    """Authenticate user with token and set HttpOnly cookie."""
+    input_token = (req.token or req.password or "").strip()
+    if not settings.WEBUI_AUTH_ENABLED or input_token == settings.WEBUI_AUTH_TOKEN:
+        response.set_cookie(
+            key="hub_auth",
+            value=input_token,
+            httponly=True,
+            samesite="lax",
+            max_age=86400 * 30
+        )
+        return {"success": True, "message": "Giriş başarılı"}
+    raise HTTPException(status_code=401, detail="Geçersiz erişim tokeni (Invalid token)")
+
+
+@app.post("/api/auth/logout")
+async def logout(response: Response):
+    """Clear authentication cookie."""
+    response.delete_cookie(key="hub_auth")
+    return {"success": True, "message": "Çıkış yapıldı"}
+
+
+@app.get("/api/auth/check")
+async def check_auth(request: Request):
+    """Check current authentication status."""
+    authenticated = is_authenticated(request)
+    return {"authenticated": authenticated, "auth_enabled": settings.WEBUI_AUTH_ENABLED}
+
+
 # ---------------- REST Endpoints ---------------- #
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint (public)."""
     return {
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -163,31 +225,11 @@ async def health_check():
             "webui": settings.ENABLE_WEBUI,
             "telegram": settings.ENABLE_TELEGRAM
         },
+        "port": settings.WEBUI_PORT,
+        "auth_enabled": settings.WEBUI_AUTH_ENABLED,
         "agy_bin": settings.AGY_BIN_PATH,
         "agy_available": os.path.isfile(settings.AGY_BIN_PATH) or (shutil.which(settings.AGY_BIN_PATH) is not None)
     }
-
-
-@app.post("/api/auth/login")
-async def login(req: LoginRequest, response: Response):
-    """Authenticate user and set cookie."""
-    if not settings.WEBUI_AUTH_ENABLED or req.password == settings.WEBUI_PASSWORD:
-        response.set_cookie(
-            key="hub_auth",
-            value=req.password,
-            httponly=True,
-            samesite="lax",
-            max_age=86400 * 30
-        )
-        return {"success": True, "message": "Authenticated successfully"}
-    raise HTTPException(status_code=401, detail="Invalid password")
-
-
-@app.post("/api/auth/logout")
-async def logout(response: Response):
-    """Clear authentication cookie."""
-    response.delete_cookie(key="hub_auth")
-    return {"success": True, "message": "Logged out successfully"}
 
 
 @app.get("/api/status")
@@ -207,6 +249,8 @@ async def get_system_status(_: None = Depends(require_auth)):
         "settings": {
             "telegram_enabled": settings.ENABLE_TELEGRAM,
             "webui_enabled": settings.ENABLE_WEBUI,
+            "webui_port": settings.WEBUI_PORT,
+            "auth_enabled": settings.WEBUI_AUTH_ENABLED,
             "default_model": settings.DEFAULT_MODEL,
             "default_effort": settings.DEFAULT_EFFORT,
             "default_workspace": settings.DEFAULT_WORKSPACE,
@@ -238,7 +282,6 @@ async def update_session(req: SessionUpdateRequest, _: None = Depends(require_au
     if req.effort is not None:
         update_data["effort"] = req.effort
     if req.workspace is not None:
-        # Validate workspace path if provided
         ws = req.workspace.strip()
         if os.path.isdir(ws):
             update_data["workspace"] = ws
@@ -407,10 +450,16 @@ async def stream_chat(req: ChatRequest, _: None = Depends(require_auth)):
 # ---------------- WebSocket Chat Endpoint ---------------- #
 
 @app.websocket("/ws/chat")
-async def websocket_chat(websocket: WebSocket):
+async def websocket_chat(websocket: WebSocket, token: Optional[str] = None):
     """
     Bi-directional WebSocket for real-time streaming chat and interactive controls.
     """
+    if settings.WEBUI_AUTH_ENABLED and settings.WEBUI_AUTH_TOKEN:
+        ws_token = token or websocket.query_params.get("token") or websocket.cookies.get("hub_auth")
+        if ws_token != settings.WEBUI_AUTH_TOKEN:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
     await websocket.accept()
     user_id = 0  # Default web user id
 

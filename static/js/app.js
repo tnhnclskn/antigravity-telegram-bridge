@@ -62,23 +62,54 @@ document.addEventListener('DOMContentLoaded', () => {
         attachments: [], // Array of { filename, saved_path }
     };
 
+    // Global copy code helper
+    window.copyCode = function(btn) {
+        try {
+            const wrapper = btn.closest('.code-block-wrapper');
+            const codeEl = wrapper ? wrapper.querySelector('code') : null;
+            if (codeEl) {
+                navigator.clipboard.writeText(codeEl.innerText).then(() => {
+                    btn.innerHTML = '<span>Kopyalandı!</span>';
+                    setTimeout(() => {
+                        btn.innerHTML = '<i data-lucide="copy" class="w-3 h-3"></i> Kopyala';
+                        lucide.createIcons();
+                    }, 2000);
+                });
+            }
+        } catch (err) {
+            console.error('Copy failed:', err);
+        }
+    };
+
     // Configure Marked.js renderer
     const renderer = new marked.Renderer();
-    renderer.code = function({ text, lang }) {
-        const language = lang && hljs.getLanguage(lang) ? lang : 'plaintext';
-        const highlighted = hljs.highlight(text, { language, ignoreIllegals: true }).value;
+    renderer.code = function(code, language) {
+        let text = typeof code === 'object' && code !== null ? (code.text || '') : (code || '');
+        let lang = typeof code === 'object' && code !== null ? (code.lang || '') : (language || '');
+        const validLang = lang && hljs.getLanguage(lang) ? lang : 'plaintext';
+        let highlighted = '';
+        try {
+            highlighted = hljs.highlight(text, { language: validLang, ignoreIllegals: true }).value;
+        } catch (e) {
+            try {
+                highlighted = hljs.highlightAuto(text).value;
+            } catch (err) {
+                highlighted = escapeHtml(text);
+            }
+        }
         return `
             <div class="code-block-wrapper">
                 <div class="code-block-header">
-                    <span>${language}</span>
-                    <button class="code-copy-btn" onclick="navigator.clipboard.writeText(decodeURIComponent('${encodeURIComponent(text)}')); this.innerText='Kopyalandı!'; setTimeout(() => this.innerText='Kopyala', 2000);">
+                    <span>${validLang}</span>
+                    <button type="button" class="code-copy-btn" onclick="window.copyCode(this)">
                         <i data-lucide="copy" class="w-3 h-3"></i> Kopyala
                     </button>
                 </div>
-                <pre><code class="hljs language-${language}">${highlighted}</code></pre>
+                <pre><code class="hljs language-${validLang}">${highlighted}</code></pre>
             </div>
         `;
     };
+
     marked.setOptions({
         renderer: renderer,
         breaks: true,
@@ -467,16 +498,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (done) break;
 
                 buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n\n');
-                buffer = lines.pop(); // keep last incomplete chunk
+                const chunks = buffer.split('\n\n');
+                buffer = chunks.pop(); // keep last incomplete chunk
 
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    const jsonStr = line.replace('data: ', '').trim();
-                    if (!jsonStr) continue;
+                for (const chunk of chunks) {
+                    if (!chunk.trim()) continue;
+
+                    // Extract all lines in this chunk
+                    const chunkLines = chunk.split('\n');
+                    let dataStr = '';
+                    for (const line of chunkLines) {
+                        const trimmed = line.trim();
+                        if (trimmed.startsWith('data:')) {
+                            dataStr = trimmed.substring(5).trim();
+                        }
+                    }
+
+                    if (!dataStr) continue;
 
                     try {
-                        const event = JSON.parse(jsonStr);
+                        const event = JSON.parse(dataStr);
                         const type = event.type;
 
                         if (type === 'init') {
@@ -506,7 +547,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         } else if (type === 'result') {
                             const finalResp = event.response || accumulatedMarkdown;
                             responseContent.innerHTML = marked.parse(finalResp);
-                            cursor.remove();
+                            if (cursor) cursor.remove();
 
                             const duration = ((performance.now() - startTime) / 1000).toFixed(1);
                             if (elements.statLatency) elements.statLatency.textContent = `${duration}s`;
@@ -515,21 +556,21 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                             await loadConversations();
                         } else if (type === 'error') {
-                            cursor.remove();
+                            if (cursor) cursor.remove();
                             responseContent.innerHTML += `<div class="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-xs mt-2">❌ Hata: ${escapeHtml(event.error)}</div>`;
                         }
                     } catch (err) {
-                        console.error('Error parsing SSE event chunk:', err);
+                        console.error('Error parsing SSE data chunk:', err, dataStr);
                     }
                 }
             }
 
-            cursor.remove();
+            if (cursor) cursor.remove();
             lucide.createIcons();
 
         } catch (e) {
             if (e.name !== 'AbortError') {
-                cursor.remove();
+                if (cursor) cursor.remove();
                 responseContent.innerHTML += `<div class="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-xs mt-2">❌ Bağlantı hatası: ${escapeHtml(e.message)}</div>`;
             }
         } finally {

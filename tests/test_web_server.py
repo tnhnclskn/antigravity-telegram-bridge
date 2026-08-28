@@ -148,9 +148,9 @@ async def test_stream_chat_endpoint(tmp_path: Path, monkeypatch):
         assert response.status_code == 200
         assert "text/event-stream" in response.headers.get("content-type", "")
         body = response.text
-        assert "event: init" in body
-        assert "event: step_update" in body
-        assert "event: result" in body
+        assert '"type": "init"' in body
+        assert '"type": "step_update"' in body
+        assert '"type": "result"' in body
 
         # Verify history saved to db
         history = await db.get_history(user_id=0)

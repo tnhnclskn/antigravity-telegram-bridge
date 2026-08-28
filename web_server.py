@@ -413,10 +413,10 @@ async def stream_chat(req: ChatRequest, _: None = Depends(require_auth)):
                 if event_type == "init":
                     final_conv_id = event.get("conversation_id")
                     await db.update_session(user_id, conversation_id=final_conv_id)
-                    yield f"event: init\ndata: {json.dumps(event)}\n\n"
+                    yield f"data: {json.dumps(event)}\n\n"
 
                 elif event_type == "step_update":
-                    yield f"event: step_update\ndata: {json.dumps(event)}\n\n"
+                    yield f"data: {json.dumps(event)}\n\n"
 
                 elif event_type == "result":
                     final_response = event.get("response", "")
@@ -424,17 +424,17 @@ async def stream_chat(req: ChatRequest, _: None = Depends(require_auth)):
                     await db.update_session(user_id, conversation_id=final_conv_id)
                     # Save assistant response to history
                     await db.add_history(user_id, final_conv_id, "assistant", final_response)
-                    yield f"event: result\ndata: {json.dumps(event)}\n\n"
+                    yield f"data: {json.dumps(event)}\n\n"
 
                 elif event_type == "error":
-                    yield f"event: error\ndata: {json.dumps(event)}\n\n"
+                    yield f"data: {json.dumps(event)}\n\n"
 
         except asyncio.CancelledError:
             agy_client.cancel_task(user_id)
-            yield f"event: error\ndata: {json.dumps({'error': 'Task cancelled by user'})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'error': 'Task cancelled by user'})}\n\n"
         except Exception as e:
             logger.exception(f"Error during SSE stream for user {user_id}")
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
 
     return StreamingResponse(
         event_generator(),

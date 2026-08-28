@@ -35,6 +35,7 @@ from formatter import (
     markdown_to_telegram_html,
     split_text_chunks,
     format_tool_status,
+    format_execution_stages_telegram,
     format_stats_footer,
     escape_html
 )
@@ -552,11 +553,25 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
                 step_type = event.get("step_type")
                 tool_name = event.get("tool_name")
                 state = event.get("state", "running")
+                tool_info = event.get("tool_info", {})
+                duration = event.get("duration_seconds")
 
                 if tool_name:
-                    tool_args = event.get("tool_info", {}).get("parameters", {})
-                    current_status = format_tool_status(tool_name, tool_args, state)
-                    
+                    existing = next((t for t in executed_tools if t.get("tool_name") == tool_name and t.get("tool_info") == tool_info), None)
+                    if existing:
+                        existing["state"] = state
+                        if duration is not None:
+                            existing["duration_seconds"] = duration
+                    else:
+                        executed_tools.append({
+                            "tool_name": tool_name,
+                            "tool_info": tool_info,
+                            "state": state,
+                            "duration_seconds": duration
+                        })
+
+                    current_status = format_tool_status(tool_name, tool_info, state, duration)
+
                     # Update status message with debouncing
                     now = time.time()
                     if current_status != last_status_text and (now - last_edit_time) >= settings.STREAM_EDIT_INTERVAL:
@@ -590,12 +605,19 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
     if not accumulated_response.strip():
         accumulated_response = "<i>(Antigravity boş yanıt döndürdü)</i>"
 
-    # Save to history
+    # Save to history with tool metadata
+    metadata_str = json.dumps({"tools": executed_tools}) if executed_tools else None
     await db.add_history(user_id, conversation_id, "user", prompt_text)
-    await db.add_history(user_id, conversation_id, "assistant", accumulated_response)
+    await db.add_history(user_id, conversation_id, "assistant", accumulated_response, metadata=metadata_str)
 
     # Convert markdown to Telegram HTML
     formatted_html = markdown_to_telegram_html(accumulated_response)
+
+    # Prepend executed tool stages & file diffs if any
+    if executed_tools:
+        stages_summary = format_execution_stages_telegram(executed_tools)
+        if stages_summary:
+            formatted_html = f"{stages_summary}\n\n{formatted_html}"
 
     # Add footer if stats are available
     if final_result_data:

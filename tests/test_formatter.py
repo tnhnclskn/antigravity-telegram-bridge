@@ -72,3 +72,33 @@ def test_format_stats_footer():
     assert "1.4s" in footer or "1.5s" in footer
     assert "1,250 tokens" in footer
     assert "320 reasoning" in footer
+
+
+def test_format_tool_diff_telegram():
+    from formatter import format_tool_diff_telegram, format_execution_stages_telegram
+
+    # Test replace_file_content diff
+    diff_res = format_tool_diff_telegram("replace_file_content", {
+        "TargetFile": "/root/app.py",
+        "Instruction": "Update port",
+        "TargetContent": "port = 8080",
+        "ReplacementContent": "port = 38291",
+        "StartLine": 10,
+        "EndLine": 12
+    })
+    assert "✏️ <b>Fark (Diff):</b>" in diff_res
+    assert "/root/app.py" in diff_res
+    assert "Update port" in diff_res
+    assert "- port = 8080" in diff_res
+    assert "+ port = 38291" in diff_res
+    assert 'language-diff' in diff_res
+
+    # Test stages summary
+    tools = [
+        {"tool_name": "replace_file_content", "tool_info": {"TargetFile": "test.py", "TargetContent": "a", "ReplacementContent": "b"}},
+        {"tool_name": "run_command", "tool_info": {"CommandLine": "pytest"}}
+    ]
+    stages_res = format_execution_stages_telegram(tools)
+    assert "<b>🛠️ İşlem Aşamaları & Kod Farkları:</b>" in stages_res
+    assert "test.py" in stages_res
+    assert "pytest" in stages_res

@@ -158,7 +158,7 @@ def split_text_chunks(text: str, max_chars: int = 3800) -> List[str]:
     return chunks
 
 
-def format_tool_status(tool_name: str, tool_args: dict, state: str = "running") -> str:
+def format_tool_status(tool_name: str, tool_args: dict, state: str = "running", duration: Optional[float] = None) -> str:
     """Format an informative status message when a tool is executed."""
     icons = {
         "run_command": "⚡",
@@ -172,23 +172,95 @@ def format_tool_status(tool_name: str, tool_args: dict, state: str = "running") 
         "read_url_content": "🌍",
         "generate_image": "🎨",
         "ask_question": "❓",
+        "invoke_subagent": "🤖",
     }
     icon = icons.get(tool_name, "⚙️")
-    
+
+    # Handle parameters if nested or flat
+    args = tool_args.get("parameters", tool_args) if isinstance(tool_args, dict) else {}
+
     arg_summary = ""
-    if tool_name == "run_command" and "CommandLine" in tool_args:
-        arg_summary = f": <code>{escape_html(str(tool_args['CommandLine'])[:80])}</code>"
-    elif tool_name in ("view_file", "write_to_file", "replace_file_content") and "TargetFile" in tool_args:
-        arg_summary = f": <code>{escape_html(str(tool_args['TargetFile'])[:60])}</code>"
-    elif tool_name in ("view_file", "write_to_file") and "AbsolutePath" in tool_args:
-        arg_summary = f": <code>{escape_html(str(tool_args['AbsolutePath'])[:60])}</code>"
-    elif tool_name == "search_web" and "query" in tool_args:
-        arg_summary = f": <i>{escape_html(str(tool_args['query'])[:60])}</i>"
-    
+    if tool_name == "run_command" and "CommandLine" in args:
+        arg_summary = f": <code>{escape_html(str(args['CommandLine'])[:80])}</code>"
+    elif tool_name in ("view_file", "write_to_file", "replace_file_content") and "TargetFile" in args:
+        arg_summary = f": <code>{escape_html(str(args['TargetFile'])[:60])}</code>"
+    elif tool_name in ("view_file", "write_to_file") and "AbsolutePath" in args:
+        arg_summary = f": <code>{escape_html(str(args['AbsolutePath'])[:60])}</code>"
+    elif tool_name == "search_web" and "query" in args:
+        arg_summary = f": <i>{escape_html(str(args['query'])[:60])}</i>"
+
     if state == "running":
         return f"{icon} <b>Çalıştırılıyor:</b> <code>{escape_html(tool_name)}</code>{arg_summary}..."
     else:
-        return f"✅ <b>Tamamlandı:</b> <code>{escape_html(tool_name)}</code>{arg_summary}"
+        dur_str = f" ({duration:.1f}s)" if duration else ""
+        return f"✅ <b>Tamamlandı:</b> <code>{escape_html(tool_name)}</code>{arg_summary}{dur_str}"
+
+
+def format_tool_diff_telegram(tool_name: str, tool_info: dict) -> str:
+    """Format file diff or tool execution stage for Telegram HTML."""
+    info = tool_info.get("parameters", tool_info) if isinstance(tool_info, dict) else {}
+
+    if tool_name == "replace_file_content":
+        file = info.get("TargetFile", "Dosya")
+        instruction = info.get("Instruction") or info.get("Description") or ""
+        target = str(info.get("TargetContent", "")).strip()
+        replacement = str(info.get("ReplacementContent", "")).strip()
+        start = info.get("StartLine", "")
+        end = info.get("EndLine", "")
+        lines_str = f" (L{start}-{end})" if start and end else ""
+
+        diff_lines = []
+        if target:
+            for l in target.splitlines():
+                diff_lines.append(f"- {l}")
+        if replacement:
+            for l in replacement.splitlines():
+                diff_lines.append(f"+ {l}")
+        diff_block = "\n".join(diff_lines)
+        if len(diff_block) > 600:
+            diff_block = diff_block[:600] + "\n..."
+
+        header = f"✏️ <b>Fark (Diff):</b> <code>{escape_html(file)}{lines_str}</code>"
+        inst_html = f"\n<i>💡 {escape_html(instruction)}</i>" if instruction else ""
+        code_html = f'\n<pre><code class="language-diff">{escape_html(diff_block)}</code></pre>' if diff_block else ""
+        return f"{header}{inst_html}{code_html}"
+
+    elif tool_name == "write_to_file":
+        file = info.get("TargetFile", "Dosya")
+        desc = info.get("Description", "")
+        code = str(info.get("CodeContent", "")).strip()
+        if len(code) > 300:
+            code = code[:300] + "\n..."
+        header = f"📝 <b>Yeni Dosya:</b> <code>{escape_html(file)}</code>"
+        desc_html = f"\n<i>{escape_html(desc)}</i>" if desc else ""
+        code_html = f"\n<pre>{escape_html(code)}</pre>" if code else ""
+        return f"{header}{desc_html}{code_html}"
+
+    elif tool_name == "run_command":
+        cmd = info.get("CommandLine", "")
+        cwd = info.get("Cwd", "")
+        header = f"⚡ <b>Komut:</b> <code>{escape_html(cmd)}</code>"
+        cwd_html = f" <i>(dizin: {escape_html(cwd)})</i>" if cwd else ""
+        return f"{header}{cwd_html}"
+
+    elif tool_name in ("view_file", "grep_search", "find_by_name", "list_dir"):
+        target = info.get("TargetFile") or info.get("AbsolutePath") or info.get("Query") or info.get("SearchPath") or ""
+        return f"🔍 <b>İnceleme ({escape_html(tool_name)}):</b> <code>{escape_html(str(target))}</code>"
+
+    return f"⚙️ <b>İşlem:</b> <code>{escape_html(tool_name)}</code>"
+
+
+def format_execution_stages_telegram(tools: List[dict]) -> str:
+    """Format a list of executed tool stages into a Telegram HTML section."""
+    if not tools:
+        return ""
+    lines = ["<b>🛠️ İşlem Aşamaları & Kod Farkları:</b>"]
+    for t in tools:
+        t_name = t.get("tool_name", "")
+        t_info = t.get("tool_info", {})
+        formatted_stage = format_tool_diff_telegram(t_name, t_info)
+        lines.append(formatted_stage)
+    return "\n\n".join(lines)
 
 
 def format_stats_footer(duration: float, usage: Optional[dict] = None) -> str:

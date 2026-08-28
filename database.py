@@ -245,6 +245,12 @@ class Database:
                 rows = await cursor.fetchall()
                 return [dict(r) for r in rows]
 
+    async def delete_conversation(self, conversation_id: str, user_id: int = 0):
+        """Delete all messages associated with a specific conversation."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM message_history WHERE conversation_id = ? AND user_id = ?", (conversation_id, user_id))
+            await db.commit()
+
     async def clear_history(self, user_id: int = 0):
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("DELETE FROM message_history WHERE user_id = ?", (user_id,))

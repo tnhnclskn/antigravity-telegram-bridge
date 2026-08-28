@@ -392,14 +392,24 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             data.conversations.forEach(c => {
-                const item = document.createElement('button');
-                item.className = 'w-full text-left p-2.5 sm:p-2 rounded-lg bg-slate-950/50 hover:bg-slate-800/80 active:bg-slate-800 transition text-slate-300 text-xs truncate border border-slate-800/40 flex items-center gap-2 touch-manipulation';
-                const snippet = c.title ? c.title.substring(0, 28) + '...' : c.conversation_id.substring(0, 12);
-                item.innerHTML = `<i data-lucide="message-square" class="w-3.5 h-3.5 text-purple-400 shrink-0"></i> <span class="truncate">${snippet}</span>`;
-                item.addEventListener('click', () => {
-                    loadConversationHistory(c.conversation_id);
-                    maybeCloseMobileSidebar();
-                });
+                const isActive = state.conversationId === c.conversation_id;
+                const item = document.createElement('div');
+                item.className = `group w-full text-left p-2 rounded-lg transition text-xs flex items-center justify-between gap-1.5 border touch-manipulation cursor-pointer ${
+                    isActive
+                        ? 'bg-purple-900/30 text-purple-200 border-purple-500/40'
+                        : 'bg-slate-950/50 hover:bg-slate-800/80 text-slate-300 border-slate-800/40'
+                }`;
+                const snippet = c.title ? c.title.substring(0, 24) + (c.title.length > 24 ? '...' : '') : c.conversation_id.substring(0, 10);
+
+                item.innerHTML = `
+                    <div class="flex items-center gap-2 truncate flex-1 min-w-0" onclick="window.selectConversation('${c.conversation_id}')">
+                        <i data-lucide="message-square" class="w-3.5 h-3.5 ${isActive ? 'text-purple-400' : 'text-slate-500 group-hover:text-purple-400'} shrink-0"></i>
+                        <span class="truncate text-[11px]">${escapeHtml(snippet)}</span>
+                    </div>
+                    <button type="button" class="text-slate-500 hover:text-rose-400 p-1 opacity-60 hover:opacity-100 transition rounded shrink-0 touch-manipulation" title="Sohbeti Sil" onclick="event.stopPropagation(); window.deleteConversation('${c.conversation_id}')">
+                        <i data-lucide="trash" class="w-3 h-3"></i>
+                    </button>
+                `;
                 elements.conversationsList.appendChild(item);
             });
             lucide.createIcons();
@@ -407,6 +417,25 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Failed to load conversations:', e);
         }
     }
+
+    window.selectConversation = function(convId) {
+        loadConversationHistory(convId);
+        loadConversations();
+        maybeCloseMobileSidebar();
+    };
+
+    window.deleteConversation = async function(convId) {
+        if (!confirm('Bu sohbeti silmek istediğinize emin misiniz?')) return;
+        try {
+            await fetch(`/api/conversations/${encodeURIComponent(convId)}`, { method: 'DELETE' });
+            if (state.conversationId === convId) {
+                await resetChat();
+            }
+            await loadConversations();
+        } catch (e) {
+            console.error('Failed to delete conversation:', e);
+        }
+    };
 
     async function loadConversationHistory(convId) {
         try {

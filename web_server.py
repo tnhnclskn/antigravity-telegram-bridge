@@ -309,6 +309,13 @@ async def get_conversations(user_id: int = 0, _: None = Depends(require_auth)):
     return {"conversations": convs}
 
 
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str, user_id: int = 0, _: None = Depends(require_auth)):
+    """Delete a specific conversation session and its history."""
+    await db.delete_conversation(conversation_id, user_id=user_id)
+    return {"success": True, "message": "Conversation deleted"}
+
+
 @app.get("/api/history")
 async def get_history(user_id: int = 0, conversation_id: Optional[str] = None, limit: int = 50, _: None = Depends(require_auth)):
     """Get message history."""

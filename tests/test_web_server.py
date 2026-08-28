@@ -159,3 +159,16 @@ async def test_stream_chat_endpoint(tmp_path: Path, monkeypatch):
         assert history[0]["content"] == "Test prompt"
         assert history[1]["role"] == "assistant"
         assert history[1]["content"] == "Hello from AI"
+
+        # List conversations
+        convs_res = await ac.get("/api/conversations")
+        assert convs_res.status_code == 200
+        convs = convs_res.json()["conversations"]
+        assert len(convs) >= 1
+        assert convs[0]["conversation_id"] == "test-conv-123"
+
+        # Delete conversation
+        del_conv_res = await ac.delete("/api/conversations/test-conv-123")
+        assert del_conv_res.status_code == 200
+        remaining_history = await db.get_history(user_id=0, conversation_id="test-conv-123")
+        assert len(remaining_history) == 0

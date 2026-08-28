@@ -155,29 +155,79 @@
     line-height: 1.5;
 }
 
-/* Tool Execution Badges */
-.tool-card {
+/* Intermediate Execution Stages & Diff Cards */
+.stage-card {
     border-radius: 0.75rem;
-    background: rgba(15, 23, 42, 0.7);
-    border: 1px solid rgba(51, 65, 85, 0.6);
-    padding: 0.4rem 0.65rem;
-    margin: 0.35rem 0;
-    font-size: 0.72rem;
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid rgba(51, 65, 85, 0.7);
+    margin: 0.45rem 0;
+    overflow: hidden;
+    transition: all 0.2s ease;
+}
+
+.stage-card.running {
+    border-color: rgba(168, 85, 247, 0.6);
+    background: rgba(168, 85, 247, 0.05);
+    box-shadow: 0 0 10px rgba(168, 85, 247, 0.12);
+}
+
+.stage-card.completed {
+    border-color: rgba(51, 65, 85, 0.7);
+}
+
+.stage-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.5rem;
-    max-width: 100%;
-    overflow: hidden;
+    padding: 0.45rem 0.75rem;
+    cursor: pointer;
+    background: rgba(30, 41, 59, 0.6);
+    border-bottom: 1px solid rgba(51, 65, 85, 0.4);
+    font-size: 0.75rem;
+    user-select: none;
 }
 
-.tool-card.running {
-    border-color: rgba(139, 92, 246, 0.5);
-    background: rgba(139, 92, 246, 0.05);
+.stage-header:hover {
+    background: rgba(30, 41, 59, 0.85);
 }
 
-.tool-card.completed {
-    border-color: rgba(16, 185, 129, 0.3);
+.stage-diff-wrapper {
+    font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.diff-target {
+    background: rgba(159, 18, 57, 0.2);
+    color: #fda4af;
+    border-left: 3px solid #f43f5e;
+    padding: 0.4rem 0.75rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.diff-replacement {
+    background: rgba(6, 78, 59, 0.25);
+    color: #6ee7b7;
+    border-left: 3px solid #10b981;
+    padding: 0.4rem 0.75rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    border-top: 1px dashed rgba(51, 65, 85, 0.6);
+}
+
+.stage-code-preview {
+    background: rgba(15, 23, 42, 0.95);
+    color: #e2e8f0;
+    padding: 0.5rem 0.75rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 140px;
+    overflow-y: auto;
 }
 
 /* Responsive hit areas */

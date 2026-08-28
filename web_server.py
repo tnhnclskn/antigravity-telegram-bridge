@@ -405,6 +405,7 @@ async def stream_chat(req: ChatRequest, _: None = Depends(require_auth)):
     async def event_generator():
         final_conv_id = conv_id
         final_response = ""
+        executed_tools = []
         try:
             async for event in agy_client.run_prompt_stream(
                 user_id=user_id,
@@ -423,14 +424,32 @@ async def stream_chat(req: ChatRequest, _: None = Depends(require_auth)):
                     yield f"data: {json.dumps(event)}\n\n"
 
                 elif event_type == "step_update":
+                    tool_name = event.get("tool_name")
+                    if tool_name:
+                        tool_info = event.get("tool_info", {})
+                        state_val = event.get("state", "running")
+                        duration = event.get("duration_seconds")
+                        existing = next((t for t in executed_tools if t.get("tool_name") == tool_name and t.get("tool_info") == tool_info), None)
+                        if existing:
+                            existing["state"] = state_val
+                            if duration is not None:
+                                existing["duration_seconds"] = duration
+                        else:
+                            executed_tools.append({
+                                "tool_name": tool_name,
+                                "tool_info": tool_info,
+                                "state": state_val,
+                                "duration_seconds": duration
+                            })
                     yield f"data: {json.dumps(event)}\n\n"
 
                 elif event_type == "result":
                     final_response = event.get("response", "")
                     final_conv_id = event.get("conversation_id", final_conv_id)
                     await db.update_session(user_id, conversation_id=final_conv_id)
-                    # Save assistant response to history
-                    await db.add_history(user_id, final_conv_id, "assistant", final_response)
+                    # Save assistant response to history with tool metadata
+                    metadata_str = json.dumps({"tools": executed_tools}) if executed_tools else None
+                    await db.add_history(user_id, final_conv_id, "assistant", final_response, metadata=metadata_str)
                     yield f"data: {json.dumps(event)}\n\n"
 
                 elif event_type == "error":

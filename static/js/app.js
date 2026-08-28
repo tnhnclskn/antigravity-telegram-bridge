@@ -374,6 +374,7 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.attachmentsTray.classList.add('hidden');
             state.attachments = [];
             lucide.createIcons();
+            loadConversations();
         } catch (e) {
             console.error('Failed to reset chat:', e);
         }
@@ -451,7 +452,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (msg.role === 'user') {
                     appendUserMessage(msg.content);
                 } else {
-                    appendAssistantMessage(msg.content, msg.metadata ? JSON.parse(msg.metadata) : null);
+                    const metadata = msg.metadata ? JSON.parse(msg.metadata) : null;
+                    appendAssistantMessage(msg.content, metadata);
                 }
             });
             scrollToBottom();
@@ -488,7 +490,7 @@ document.addEventListener('DOMContentLoaded', () => {
         autoResizeTextarea(elements.inputPrompt);
 
         // Prepare Assistant Streaming Container
-        const { messageElement, thinkingContainer, thinkingContent, toolsContainer, responseContent, cursor } = createAssistantStreamingBubble();
+        const { messageElement, thinkingContainer, thinkingContent, stagesContainer, responseContent, cursor } = createAssistantStreamingBubble();
 
         setStreamingState(true);
         const startTime = performance.now();
@@ -562,9 +564,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                 thinkingContainer.classList.remove('hidden');
                                 thinkingContent.textContent = accumulatedThinking;
                             } 
-                            // Handle tool execution
+                            // Handle tool & diff stage execution
                             else if (toolName) {
-                                renderToolCard(toolsContainer, toolName, event.tool_info, event.state, event.duration_seconds);
+                                renderStageCard(stagesContainer, toolName, event.tool_info, event.state, event.duration_seconds);
                             } 
                             // Handle text response delta
                             else if (textDelta) {
@@ -690,8 +692,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="thinking-content p-3 text-slate-400 font-mono text-[10px] sm:text-[11px] whitespace-pre-wrap border-t border-slate-800/60 max-h-48 overflow-y-auto"></div>
                 </div>
 
-                <!-- Tools container -->
-                <div class="tools-container space-y-1.5"></div>
+                <!-- Stages & Diffs container -->
+                <div class="stages-container space-y-2"></div>
 
                 <!-- Response container -->
                 <div class="bg-slate-900 border border-slate-800/80 rounded-2xl rounded-tl-sm p-3.5 sm:p-4 text-slate-100 shadow-md">
@@ -709,7 +711,7 @@ document.addEventListener('DOMContentLoaded', () => {
             messageElement: row,
             thinkingContainer: row.querySelector('.thinking-container'),
             thinkingContent: row.querySelector('.thinking-content'),
-            toolsContainer: row.querySelector('.tools-container'),
+            stagesContainer: row.querySelector('.stages-container'),
             responseContent: row.querySelector('.response-content'),
             cursor: row.querySelector('.typing-cursor')
         };
@@ -718,43 +720,140 @@ document.addEventListener('DOMContentLoaded', () => {
     function appendAssistantMessage(content, metadata) {
         const row = document.createElement('div');
         row.className = 'flex items-start gap-2 sm:gap-3 max-w-full sm:max-w-3xl';
+
+        let stagesHtml = '';
+        if (metadata && metadata.tools && metadata.tools.length > 0) {
+            stagesHtml = `<div class="stages-container space-y-2 mb-2"></div>`;
+        }
+
         row.innerHTML = `
             <div class="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center text-white shrink-0 shadow-md mt-1">
                 <i data-lucide="bot" class="w-3.5 h-3.5 sm:w-4 sm:h-4"></i>
             </div>
-            <div class="flex-1 bg-slate-900 border border-slate-800/80 rounded-2xl rounded-tl-sm p-3.5 sm:p-4 text-slate-100 shadow-md markdown-body min-w-0">
-                ${marked.parse(content || '')}
+            <div class="flex-1 space-y-2 overflow-hidden min-w-0">
+                ${stagesHtml}
+                <div class="bg-slate-900 border border-slate-800/80 rounded-2xl rounded-tl-sm p-3.5 sm:p-4 text-slate-100 shadow-md markdown-body min-w-0">
+                    ${marked.parse(content || '')}
+                </div>
             </div>
         `;
+
         elements.messagesContainer.appendChild(row);
+
+        if (metadata && metadata.tools && metadata.tools.length > 0) {
+            const stagesContainer = row.querySelector('.stages-container');
+            metadata.tools.forEach(t => {
+                renderStageCard(stagesContainer, t.tool_name, t.tool_info, t.state || 'completed', t.duration_seconds);
+            });
+        }
+
         lucide.createIcons();
     }
 
-    function renderToolCard(container, toolName, toolInfo, state, duration) {
-        const cardId = `tool-${toolName}-${JSON.stringify(toolInfo || {})}`;
-        let card = container.querySelector(`[data-tool-id="${CSS.escape(cardId)}"]`);
-
+    function renderStageCard(container, toolName, toolInfo, state, duration) {
+        const info = toolInfo || {};
         const isRunning = state === 'running';
-        const icon = getToolIcon(toolName);
-        const argSnippet = getToolArgSnippet(toolName, toolInfo);
+        const cardId = `stage-${toolName}-${info.TargetFile || info.CommandLine || info.AbsolutePath || info.SearchPath || info.query || Math.random()}`;
+
+        let card = container.querySelector(`[data-stage-id="${CSS.escape(cardId)}"]`);
 
         if (!card) {
             card = document.createElement('div');
-            card.dataset.toolId = cardId;
+            card.dataset.stageId = cardId;
             container.appendChild(card);
         }
 
-        card.className = `tool-card ${isRunning ? 'running' : 'completed'}`;
-        card.innerHTML = `
-            <div class="flex items-center gap-1.5 sm:gap-2 truncate min-w-0">
-                <span class="${isRunning ? 'animate-spin text-purple-400' : 'text-emerald-400'} shrink-0">${icon}</span>
-                <span class="font-mono font-semibold text-slate-200 text-[11px] sm:text-xs shrink-0">${escapeHtml(toolName)}</span>
-                <span class="text-slate-400 truncate text-[10px] sm:text-[11px] font-mono">${escapeHtml(argSnippet)}</span>
-            </div>
-            <div class="text-[9px] sm:text-[10px] font-mono text-slate-400 shrink-0">
-                ${isRunning ? '<span class="text-purple-400 animate-pulse">Çalışıyor</span>' : (duration ? `✅ ${duration.toFixed(1)}s` : '✅')}
-            </div>
-        `;
+        card.className = `stage-card ${isRunning ? 'running' : 'completed'}`;
+
+        const statusBadge = isRunning
+            ? '<span class="text-purple-400 animate-pulse font-mono text-[10px] flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping"></span> İşleniyor</span>'
+            : (duration ? `<span class="text-emerald-400 font-mono text-[10px] flex items-center gap-1">✅ ${duration.toFixed(1)}s</span>` : '<span class="text-emerald-400 font-mono text-[10px]">✅</span>');
+
+        // Render based on Tool Type
+        if (toolName === 'replace_file_content') {
+            const file = info.TargetFile || 'Dosya';
+            const instruction = info.Instruction || info.Description || '';
+            const targetContent = info.TargetContent || '';
+            const replacementContent = info.ReplacementContent || '';
+            const lineInfo = (info.StartLine && info.EndLine) ? ` (L${info.StartLine}-${info.EndLine})` : '';
+
+            card.innerHTML = `
+                <div class="stage-header" onclick="this.nextElementSibling.classList.toggle('hidden')">
+                    <div class="flex items-center gap-2 truncate min-w-0">
+                        <span class="text-purple-400 shrink-0">✏️</span>
+                        <span class="font-mono font-semibold text-slate-200 text-xs truncate">Fark (Diff): <span class="text-purple-300">${escapeHtml(file)}${lineInfo}</span></span>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                        ${statusBadge}
+                        <i data-lucide="chevron-down" class="w-3 h-3 text-slate-400"></i>
+                    </div>
+                </div>
+                <div class="stage-body">
+                    ${instruction ? `<div class="px-3 py-1.5 text-xs text-purple-200 bg-purple-950/30 border-b border-slate-800/80 font-sans flex items-center gap-1.5"><i data-lucide="sparkles" class="w-3 h-3 text-purple-400 shrink-0"></i> ${escapeHtml(instruction)}</div>` : ''}
+                    <div class="stage-diff-wrapper">
+                        ${targetContent ? `<div class="diff-target"><div class="text-[9px] uppercase font-bold text-rose-400 mb-0.5 opacity-80">- Değiştirilen / Kaldırılan Kod:</div>${escapeHtml(targetContent)}</div>` : ''}
+                        ${replacementContent ? `<div class="diff-replacement"><div class="text-[9px] uppercase font-bold text-emerald-400 mb-0.5 opacity-80">+ Yeni / Eklenen Kod:</div>${escapeHtml(replacementContent)}</div>` : ''}
+                    </div>
+                </div>
+            `;
+        }
+        else if (toolName === 'write_to_file') {
+            const file = info.TargetFile || 'Dosya';
+            const description = info.Description || '';
+            const codeContent = info.CodeContent || '';
+
+            card.innerHTML = `
+                <div class="stage-header" onclick="this.nextElementSibling.classList.toggle('hidden')">
+                    <div class="flex items-center gap-2 truncate min-w-0">
+                        <span class="text-indigo-400 shrink-0">📝</span>
+                        <span class="font-mono font-semibold text-slate-200 text-xs truncate">Yeni Dosya: <span class="text-indigo-300">${escapeHtml(file)}</span></span>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                        ${statusBadge}
+                        <i data-lucide="chevron-down" class="w-3 h-3 text-slate-400"></i>
+                    </div>
+                </div>
+                <div class="stage-body">
+                    ${description ? `<div class="px-3 py-1.5 text-xs text-indigo-200 bg-indigo-950/30 border-b border-slate-800/80 font-sans">${escapeHtml(description)}</div>` : ''}
+                    ${codeContent ? `<div class="stage-code-preview">${escapeHtml(codeContent.substring(0, 300))}${codeContent.length > 300 ? '\n\n... (kalan içerik gizlendi)' : ''}</div>` : ''}
+                </div>
+            `;
+        }
+        else if (toolName === 'run_command') {
+            const cmd = info.CommandLine || '';
+            const cwd = info.Cwd || '';
+
+            card.innerHTML = `
+                <div class="stage-header">
+                    <div class="flex items-center gap-2 truncate min-w-0">
+                        <span class="text-amber-400 shrink-0">⚡</span>
+                        <span class="font-mono font-semibold text-slate-200 text-xs truncate">Komut: <span class="text-amber-300">${escapeHtml(cmd)}</span></span>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                        ${statusBadge}
+                    </div>
+                </div>
+                ${cwd ? `<div class="px-3 py-1 text-[10px] text-slate-500 font-mono bg-slate-950/50 border-t border-slate-800/40">Dizin: ${escapeHtml(cwd)}</div>` : ''}
+            `;
+        }
+        else {
+            const icon = getToolIcon(toolName);
+            const snippet = getToolArgSnippet(toolName, info);
+
+            card.innerHTML = `
+                <div class="stage-header">
+                    <div class="flex items-center gap-2 truncate min-w-0">
+                        <span class="shrink-0">${icon}</span>
+                        <span class="font-mono font-semibold text-slate-200 text-xs">${escapeHtml(toolName)}</span>
+                        <span class="text-slate-400 truncate text-[11px] font-mono">${escapeHtml(snippet)}</span>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                        ${statusBadge}
+                    </div>
+                </div>
+            `;
+        }
+
         lucide.createIcons();
     }
 
@@ -767,7 +866,9 @@ document.addEventListener('DOMContentLoaded', () => {
             grep_search: '🔍',
             find_by_name: '🔎',
             list_dir: '📁',
-            search_web: '🌐'
+            search_web: '🌐',
+            schedule: '⏰',
+            invoke_subagent: '🤖'
         };
         return icons[name] || '⚙️';
     }
@@ -778,6 +879,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (info.TargetFile) return info.TargetFile;
         if (info.AbsolutePath) return info.AbsolutePath;
         if (info.query) return info.query;
+        if (info.SearchPath) return info.SearchPath;
+        if (info.DirectoryPath) return info.DirectoryPath;
         return '';
     }
 

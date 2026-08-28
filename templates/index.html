@@ -1,8 +1,11 @@
 <!DOCTYPE html>
-<html lang="tr" class="dark">
+<html lang="tr" class="dark h-full">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#090d16">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>{{ title }} - Antigravity Hub</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -22,6 +25,7 @@
                             900: '#4c1d95',
                         },
                         dark: {
+                            950: '#090d16',
                             900: '#0f172a',
                             800: '#1e293b',
                             700: '#334155',
@@ -45,13 +49,16 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-purple-500 selection:text-white antialiased">
+<body class="bg-slate-950 text-slate-100 h-[100dvh] w-full flex flex-col font-sans selection:bg-purple-500 selection:text-white antialiased overflow-hidden">
+
+    <!-- Mobile Sidebar Backdrop Overlay -->
+    <div id="sidebar-backdrop" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 hidden transition-opacity duration-300 lg:hidden"></div>
 
     <!-- Main Container -->
-    <div class="flex h-screen overflow-hidden">
+    <div class="flex h-full w-full overflow-hidden relative">
 
-        <!-- Sidebar -->
-        <aside id="sidebar" class="w-80 bg-slate-900 border-r border-slate-800 flex flex-col transition-all duration-300 z-30 shrink-0 select-none">
+        <!-- Off-Canvas Sidebar (Drawer on mobile, fixed on desktop) -->
+        <aside id="sidebar" class="fixed inset-y-0 left-0 z-50 w-[85vw] max-w-xs lg:static lg:w-80 bg-slate-900 border-r border-slate-800 flex flex-col transition-transform duration-300 ease-in-out -translate-x-full lg:translate-x-0 shrink-0 select-none shadow-2xl lg:shadow-none h-full">
             <!-- Sidebar Header -->
             <div class="p-4 border-b border-slate-800 flex items-center justify-between">
                 <div class="flex items-center gap-3">
@@ -66,11 +73,16 @@
                         <p class="text-xs text-slate-400">Agentic CLI Bridge</p>
                     </div>
                 </div>
+
+                <!-- Mobile Close Sidebar Button -->
+                <button id="btn-close-sidebar" class="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition lg:hidden touch-manipulation" aria-label="Menüyü Kapat">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
             </div>
 
             <!-- New Session Button -->
             <div class="p-3">
-                <button id="btn-new-chat" class="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-medium py-2.5 px-4 rounded-xl shadow-md transition-all active:scale-[0.98]">
+                <button id="btn-new-chat" class="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-medium py-2.5 px-4 rounded-xl shadow-md transition-all active:scale-[0.98] touch-manipulation">
                     <i data-lucide="plus" class="w-4 h-4"></i>
                     <span>Yeni Oturum</span>
                 </button>
@@ -83,7 +95,7 @@
                     <label class="font-semibold text-slate-300 flex items-center gap-1.5">
                         <i data-lucide="cpu" class="w-3.5 h-3.5 text-purple-400"></i> Model
                     </label>
-                    <select id="select-model" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-slate-200 text-xs focus:ring-1 focus:ring-purple-500 focus:border-purple-500 outline-none">
+                    <select id="select-model" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2.5 text-slate-200 text-xs focus:ring-1 focus:ring-purple-500 focus:border-purple-500 outline-none">
                         <option value="gemini-3.7-flash-high">gemini-3.7-flash-high (Önerilen)</option>
                         <option value="gemini-3.1-pro-high">gemini-3.1-pro-high</option>
                         <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
@@ -96,9 +108,9 @@
                         <i data-lucide="brain-circuit" class="w-3.5 h-3.5 text-purple-400"></i> Düşünme Seviyesi (Effort)
                     </label>
                     <div class="grid grid-cols-3 gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800">
-                        <button type="button" data-effort="low" class="effort-btn py-1 rounded text-center font-medium transition text-slate-400 hover:text-white">low</button>
-                        <button type="button" data-effort="medium" class="effort-btn py-1 rounded text-center font-medium transition text-slate-400 hover:text-white">medium</button>
-                        <button type="button" data-effort="high" class="effort-btn py-1 rounded text-center font-medium transition bg-purple-600 text-white shadow-sm">high</button>
+                        <button type="button" data-effort="low" class="effort-btn py-2 sm:py-1 rounded text-center font-medium transition text-slate-400 hover:text-white touch-manipulation">low</button>
+                        <button type="button" data-effort="medium" class="effort-btn py-2 sm:py-1 rounded text-center font-medium transition text-slate-400 hover:text-white touch-manipulation">medium</button>
+                        <button type="button" data-effort="high" class="effort-btn py-2 sm:py-1 rounded text-center font-medium transition bg-purple-600 text-white shadow-sm touch-manipulation">high</button>
                     </div>
                 </div>
 
@@ -107,10 +119,10 @@
                     <label class="font-semibold text-slate-300 flex items-center gap-1.5">
                         <i data-lucide="folder" class="w-3.5 h-3.5 text-purple-400"></i> Çalışma Dizini (Workspace)
                     </label>
-                    <div class="flex gap-1">
-                        <input id="input-workspace" type="text" value="/root" class="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 text-xs font-mono focus:ring-1 focus:ring-purple-500 outline-none" />
-                        <button id="btn-save-workspace" title="Dizini Kaydet" class="bg-slate-800 hover:bg-slate-700 px-2.5 py-1.5 rounded-lg text-slate-300 transition">
-                            <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                    <div class="flex gap-1.5">
+                        <input id="input-workspace" type="text" value="/root" class="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-slate-200 text-xs font-mono focus:ring-1 focus:ring-purple-500 outline-none" />
+                        <button id="btn-save-workspace" title="Dizini Kaydet" class="bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg text-slate-300 transition touch-manipulation">
+                            <i data-lucide="check" class="w-4 h-4"></i>
                         </button>
                     </div>
                 </div>
@@ -121,9 +133,9 @@
                         <span class="font-medium text-slate-200 text-xs">Otonom İzin</span>
                         <span class="text-[10px] text-slate-400">Komutları doğrudan onayla</span>
                     </div>
-                    <label class="relative inline-flex items-center cursor-pointer">
+                    <label class="relative inline-flex items-center cursor-pointer touch-manipulation p-1">
                         <input type="checkbox" id="toggle-auto-approve" class="sr-only peer" checked>
-                        <div class="w-8 h-4 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-purple-600"></div>
+                        <div class="w-8 h-4 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[6px] after:left-[6px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-purple-600"></div>
                     </label>
                 </div>
 
@@ -131,11 +143,11 @@
                 <div class="pt-2 border-t border-slate-800">
                     <div class="flex items-center justify-between mb-2">
                         <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Önceki Oturumlar</span>
-                        <button id="btn-clear-history" title="Geçmişi Temizle" class="text-slate-500 hover:text-rose-400 transition">
+                        <button id="btn-clear-history" title="Geçmişi Temizle" class="text-slate-500 hover:text-rose-400 p-1 transition touch-manipulation">
                             <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                         </button>
                     </div>
-                    <div id="conversations-list" class="space-y-1 max-h-48 overflow-y-auto pr-1">
+                    <div id="conversations-list" class="space-y-1 max-h-44 sm:max-h-48 overflow-y-auto pr-1">
                         <!-- Populated by JS -->
                         <div class="text-[11px] text-slate-500 text-center py-2">Kayıtlı oturum yok</div>
                     </div>
@@ -144,7 +156,7 @@
 
             <!-- Sidebar Footer -->
             <div class="p-3 border-t border-slate-800 bg-slate-900/50 flex items-center justify-between text-xs">
-                <button id="btn-open-system-modal" class="flex items-center gap-1.5 text-slate-400 hover:text-purple-400 transition">
+                <button id="btn-open-system-modal" class="flex items-center gap-1.5 text-slate-400 hover:text-purple-400 p-1.5 rounded transition touch-manipulation">
                     <i data-lucide="activity" class="w-3.5 h-3.5"></i>
                     <span>Sistem & İzinler</span>
                 </button>
@@ -159,73 +171,74 @@
         <main class="flex-1 flex flex-col h-full overflow-hidden bg-slate-950 relative">
 
             <!-- Top Header Bar -->
-            <header class="h-14 border-b border-slate-800/80 bg-slate-900/60 backdrop-blur px-6 flex items-center justify-between shrink-0">
-                <div class="flex items-center gap-3">
-                    <button id="btn-toggle-sidebar" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition lg:hidden">
+            <header class="h-14 sm:h-16 border-b border-slate-800/80 bg-slate-900/70 backdrop-blur px-3 sm:px-6 flex items-center justify-between shrink-0 z-10">
+                <div class="flex items-center gap-2 sm:gap-3 min-w-0">
+                    <!-- Mobile Hamburger Button -->
+                    <button id="btn-toggle-sidebar" class="p-2 -ml-1 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 active:bg-slate-700 transition lg:hidden touch-manipulation" aria-label="Menüyü Aç">
                         <i data-lucide="menu" class="w-5 h-5"></i>
                     </button>
-                    <div class="flex items-center gap-2">
-                        <span id="current-model-badge" class="px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-500/10 text-purple-300 border border-purple-500/30">
+                    <div class="flex items-center gap-1.5 sm:gap-2 min-w-0">
+                        <span id="current-model-badge" class="px-2 sm:px-2.5 py-0.5 rounded-full text-[11px] sm:text-xs font-medium bg-purple-500/10 text-purple-300 border border-purple-500/30 truncate max-w-[130px] sm:max-w-none">
                             gemini-3.7-flash-high
                         </span>
-                        <span id="current-workspace-badge" class="hidden sm:inline-block font-mono text-xs text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 truncate max-w-xs">
+                        <span id="current-workspace-badge" class="hidden md:inline-block font-mono text-xs text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 truncate max-w-[160px] lg:max-w-xs">
                             /root
                         </span>
                     </div>
                 </div>
 
-                <div class="flex items-center gap-3">
+                <div class="flex items-center gap-2 sm:gap-3 shrink-0">
                     <!-- Status indicator -->
-                    <div id="status-indicator" class="flex items-center gap-1.5 text-xs text-slate-400 bg-slate-900/80 px-2.5 py-1 rounded-full border border-slate-800">
+                    <div id="status-indicator" class="flex items-center gap-1.5 text-[11px] sm:text-xs text-slate-400 bg-slate-900/80 px-2 sm:px-2.5 py-1 rounded-full border border-slate-800">
                         <span id="status-dot" class="w-2 h-2 rounded-full bg-emerald-400"></span>
                         <span id="status-text">Hazır</span>
                     </div>
 
                     <!-- Cancel / Stop Running Button -->
-                    <button id="btn-cancel-task" class="hidden items-center gap-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-xs px-3 py-1.5 rounded-lg transition active:scale-95">
-                        <i data-lucide="square" class="w-3.5 h-3.5 fill-rose-300"></i>
+                    <button id="btn-cancel-task" class="hidden items-center gap-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-[11px] sm:text-xs px-2.5 py-1 rounded-lg transition active:scale-95 touch-manipulation">
+                        <i data-lucide="square" class="w-3 h-3 fill-rose-300"></i>
                         <span>Durdur</span>
                     </button>
                 </div>
             </header>
 
             <!-- Messages Stream Area -->
-            <div id="messages-container" class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 scroll-smooth">
+            <div id="messages-container" class="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-6 space-y-4 sm:space-y-6 scroll-smooth">
 
                 <!-- Welcome Card -->
-                <div id="welcome-card" class="max-w-2xl mx-auto mt-8 p-6 rounded-2xl bg-gradient-to-b from-slate-900/80 to-slate-900/30 border border-slate-800 text-center space-y-4 shadow-xl">
+                <div id="welcome-card" class="max-w-2xl mx-auto my-auto py-6 px-4 sm:p-6 rounded-2xl bg-gradient-to-b from-slate-900/80 to-slate-900/30 border border-slate-800 text-center space-y-4 shadow-xl">
                     <div class="w-12 h-12 rounded-2xl bg-purple-600/20 border border-purple-500/30 flex items-center justify-center mx-auto text-purple-400 shadow-inner">
                         <i data-lucide="terminal" class="w-6 h-6"></i>
                     </div>
-                    <h2 class="text-xl font-bold text-white tracking-tight">Antigravity Hub CLI Köprüsü</h2>
-                    <p class="text-sm text-slate-400 max-w-md mx-auto">
-                        Sunucunuzdaki Google Antigravity yapay zeka aracına web üzerinden doğrudan erişin, kod yazdırın ve araçları otonom çalıştırın.
+                    <h2 class="text-lg sm:text-xl font-bold text-white tracking-tight">Antigravity Hub CLI Köprüsü</h2>
+                    <p class="text-xs sm:text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
+                        Sunucunuzdaki Google Antigravity yapay zeka aracına web üzerinden doğrudan erişin, kod geliştirin ve komutları çalıştırın.
                     </p>
 
                     <!-- Quick Action Chips -->
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 text-left">
-                        <button class="quick-chip p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 hover:border-purple-500/50 hover:bg-slate-900 transition flex items-start gap-2.5 text-xs text-slate-300">
+                        <button class="quick-chip p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 hover:border-purple-500/50 hover:bg-slate-900 transition flex items-start gap-2.5 text-xs text-slate-300 active:scale-[0.99] touch-manipulation">
                             <i data-lucide="folder-search" class="w-4 h-4 text-purple-400 shrink-0 mt-0.5"></i>
                             <div>
                                 <div class="font-semibold text-white">Çalışma Alanını İncele</div>
                                 <div class="text-[11px] text-slate-400">Proje dizinindeki dosyaları listele ve özetle.</div>
                             </div>
                         </button>
-                        <button class="quick-chip p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 hover:border-purple-500/50 hover:bg-slate-900 transition flex items-start gap-2.5 text-xs text-slate-300">
+                        <button class="quick-chip p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 hover:border-purple-500/50 hover:bg-slate-900 transition flex items-start gap-2.5 text-xs text-slate-300 active:scale-[0.99] touch-manipulation">
                             <i data-lucide="git-branch" class="w-4 h-4 text-indigo-400 shrink-0 mt-0.5"></i>
                             <div>
                                 <div class="font-semibold text-white">Git Durumunu Kontrol Et</div>
                                 <div class="text-[11px] text-slate-400">Son commit'leri ve değişiklikleri analiz et.</div>
                             </div>
                         </button>
-                        <button class="quick-chip p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 hover:border-purple-500/50 hover:bg-slate-900 transition flex items-start gap-2.5 text-xs text-slate-300">
+                        <button class="quick-chip p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 hover:border-purple-500/50 hover:bg-slate-900 transition flex items-start gap-2.5 text-xs text-slate-300 active:scale-[0.99] touch-manipulation">
                             <i data-lucide="shield-check" class="w-4 h-4 text-emerald-400 shrink-0 mt-0.5"></i>
                             <div>
                                 <div class="font-semibold text-white">Testleri Çalıştır</div>
                                 <div class="text-[11px] text-slate-400">Mevcut projenin testlerini koştur ve raporla.</div>
                             </div>
                         </button>
-                        <button class="quick-chip p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 hover:border-purple-500/50 hover:bg-slate-900 transition flex items-start gap-2.5 text-xs text-slate-300">
+                        <button class="quick-chip p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 hover:border-purple-500/50 hover:bg-slate-900 transition flex items-start gap-2.5 text-xs text-slate-300 active:scale-[0.99] touch-manipulation">
                             <i data-lucide="zap" class="w-4 h-4 text-amber-400 shrink-0 mt-0.5"></i>
                             <div>
                                 <div class="font-semibold text-white">Sistem Durumu & Kaynaklar</div>
@@ -237,42 +250,43 @@
 
             </div>
 
-            <!-- Bottom Input Box Area -->
-            <div class="p-4 sm:p-6 bg-gradient-to-t from-slate-950 via-slate-950 to-transparent shrink-0">
-                <div class="max-w-4xl mx-auto space-y-2">
+            <!-- Bottom Input Box Area (Mobile Sticky & Touch-Optimized) -->
+            <div class="p-2.5 sm:p-4 md:p-6 bg-gradient-to-t from-slate-950 via-slate-950 to-transparent shrink-0 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+                <div class="max-w-4xl mx-auto space-y-1.5 sm:space-y-2">
 
                     <!-- Attachments preview tray -->
-                    <div id="attachments-tray" class="hidden flex-wrap gap-2 py-1"></div>
+                    <div id="attachments-tray" class="hidden flex-wrap gap-1.5 py-1"></div>
 
                     <!-- Input Box Container -->
-                    <div class="relative bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl focus-within:border-purple-500/60 focus-within:ring-1 focus-within:ring-purple-500/40 transition-all p-2">
+                    <div class="relative bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl focus-within:border-purple-500/60 focus-within:ring-1 focus-within:ring-purple-500/40 transition-all p-1.5 sm:p-2">
                         <textarea
                             id="input-prompt"
                             rows="2"
-                            placeholder="Antigravity'ye bir mesaj yazın veya talimat verin... (Göndermek için Enter, alt satır için Shift+Enter)"
-                            class="w-full bg-transparent border-0 text-slate-100 placeholder-slate-500 text-sm focus:ring-0 resize-none px-3 py-2 outline-none max-h-48 overflow-y-auto font-sans"
+                            placeholder="Mesajınızı veya talimatınızı yazın..."
+                            class="w-full bg-transparent border-0 text-slate-100 placeholder-slate-500 text-base sm:text-sm focus:ring-0 resize-none px-2.5 py-1.5 sm:px-3 sm:py-2 outline-none max-h-36 sm:max-h-48 overflow-y-auto font-sans leading-relaxed"
                         ></textarea>
 
                         <!-- Action Bar inside input -->
-                        <div class="flex items-center justify-between pt-2 px-2 border-t border-slate-800/60 text-xs">
-                            <div class="flex items-center gap-2">
+                        <div class="flex items-center justify-between pt-1.5 px-1 sm:px-2 border-t border-slate-800/60 text-xs">
+                            <div class="flex items-center gap-1 sm:gap-2">
                                 <!-- Upload Attachment button -->
-                                <label class="cursor-pointer p-1.5 rounded-lg text-slate-400 hover:text-purple-400 hover:bg-slate-800/80 transition flex items-center gap-1">
+                                <label class="cursor-pointer p-2 rounded-xl text-slate-400 hover:text-purple-400 hover:bg-slate-800/80 active:bg-slate-800 transition flex items-center gap-1 touch-manipulation" title="Dosya / Medya Ekle">
                                     <i data-lucide="paperclip" class="w-4 h-4"></i>
                                     <span class="hidden sm:inline text-[11px]">Dosya Ekle</span>
                                     <input type="file" id="file-upload" class="hidden" multiple />
                                 </label>
 
-                                <span id="typing-indicator" class="hidden items-center gap-1.5 text-purple-400 font-mono text-[11px]">
-                                    <span class="w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping"></span>
-                                    Antigravity düşünüyor...
+                                <span id="typing-indicator" class="hidden items-center gap-1.5 text-purple-400 font-mono text-[10px] sm:text-[11px] truncate max-w-[140px] sm:max-w-none">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping shrink-0"></span>
+                                    <span>Düşünüyor...</span>
                                 </span>
                             </div>
 
                             <div class="flex items-center gap-2">
                                 <button
                                     id="btn-send-prompt"
-                                    class="bg-purple-600 hover:bg-purple-500 text-white font-medium px-4 py-1.5 rounded-xl shadow-md transition-all active:scale-95 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    class="bg-purple-600 hover:bg-purple-500 active:bg-purple-700 text-white font-medium px-3.5 py-2 sm:px-4 sm:py-1.5 rounded-xl shadow-md transition-all active:scale-95 flex items-center gap-1.5 text-xs sm:text-xs disabled:opacity-50 disabled:cursor-not-allowed touch-manipulation"
+                                    aria-label="Gönder"
                                 >
                                     <span>Gönder</span>
                                     <i data-lucide="send" class="w-3.5 h-3.5"></i>
@@ -282,20 +296,20 @@
                     </div>
 
                     <!-- Footer Info & Branding -->
-                    <div class="flex flex-col sm:flex-row items-center justify-between text-[11px] text-slate-500 px-2 font-mono gap-2 pt-1 border-t border-slate-900/80">
-                        <div class="flex items-center gap-3">
-                            <span id="stat-turns">Turn: 0</span>
-                            <span id="stat-latency">Latency: --</span>
-                            <span id="stat-tokens">Tokens: --</span>
+                    <div class="flex items-center justify-between text-[10px] sm:text-[11px] text-slate-500 px-2 font-mono gap-2 pt-1">
+                        <div class="flex items-center gap-2 sm:gap-3 truncate">
+                            <span id="stat-latency">--</span>
+                            <span class="text-slate-700">|</span>
+                            <span id="stat-tokens">--</span>
                         </div>
-                        <div class="flex items-center gap-3">
-                            <a href="https://cekirdekod.com/" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 opacity-70 hover:opacity-100 transition">
-                                <img src="https://cekirdekod.com/images/logo-text.png" alt="Çekirdekod" class="h-3.5 brightness-90 hover:brightness-100 transition" />
+                        <div class="flex items-center gap-2.5 shrink-0">
+                            <a href="https://cekirdekod.com/" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 opacity-75 hover:opacity-100 transition" title="Çekirdekod">
+                                <img src="https://cekirdekod.com/images/logo-text.png" alt="Çekirdekod" class="h-3 sm:h-3.5 brightness-90 hover:brightness-100 transition" />
                             </a>
                             <span class="text-slate-700">|</span>
-                            <button id="btn-logout" class="text-slate-500 hover:text-rose-400 transition flex items-center gap-1" title="Oturumu Kapat">
+                            <button id="btn-logout" class="text-slate-500 hover:text-rose-400 transition flex items-center gap-1 touch-manipulation" title="Oturumu Kapat">
                                 <i data-lucide="log-out" class="w-3 h-3"></i>
-                                <span>Çıkış</span>
+                                <span class="hidden xs:inline sm:inline">Çıkış</span>
                             </button>
                         </div>
                     </div>
@@ -305,55 +319,55 @@
         </main>
     </div>
 
-    <!-- System & Whitelist Modal -->
-    <div id="modal-system" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+    <!-- Responsive System & Whitelist Modal -->
+    <div id="modal-system" class="hidden fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[90dvh] flex flex-col">
             <!-- Modal Header -->
-            <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+            <div class="p-3.5 sm:p-4 border-b border-slate-800 flex items-center justify-between shrink-0">
                 <div class="flex items-center gap-2">
                     <i data-lucide="server" class="w-4 h-4 text-purple-400"></i>
-                    <h3 class="font-semibold text-sm text-white">Sistem Bilgisi & İzin Yönetimi</h3>
+                    <h3 class="font-semibold text-xs sm:text-sm text-white">Sistem Bilgisi & İzin Yönetimi</h3>
                 </div>
-                <button id="btn-close-modal" class="text-slate-400 hover:text-white p-1 rounded-lg">
+                <button id="btn-close-modal" class="text-slate-400 hover:text-white p-1.5 rounded-lg touch-manipulation">
                     <i data-lucide="x" class="w-4 h-4"></i>
                 </button>
             </div>
 
-            <!-- Modal Content -->
-            <div class="p-5 space-y-5 text-xs">
+            <!-- Modal Content (Scrollable) -->
+            <div class="p-4 sm:p-5 space-y-4 sm:space-y-5 text-xs overflow-y-auto flex-1">
                 <!-- System Stats Cards -->
-                <div class="grid grid-cols-3 gap-3">
-                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-800/80">
-                        <div class="text-slate-400 text-[10px] uppercase font-mono">CPU Kullanımı</div>
-                        <div id="modal-cpu-val" class="text-lg font-bold text-white mt-1">0%</div>
+                <div class="grid grid-cols-3 gap-2 sm:gap-3">
+                    <div class="bg-slate-950 p-2.5 sm:p-3 rounded-xl border border-slate-800/80 text-center sm:text-left">
+                        <div class="text-slate-400 text-[9px] sm:text-[10px] uppercase font-mono truncate">CPU</div>
+                        <div id="modal-cpu-val" class="text-sm sm:text-lg font-bold text-white mt-0.5">0%</div>
                     </div>
-                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-800/80">
-                        <div class="text-slate-400 text-[10px] uppercase font-mono">RAM Kullanımı</div>
-                        <div id="modal-ram-val" class="text-lg font-bold text-white mt-1">0 / 0 GB</div>
+                    <div class="bg-slate-950 p-2.5 sm:p-3 rounded-xl border border-slate-800/80 text-center sm:text-left">
+                        <div class="text-slate-400 text-[9px] sm:text-[10px] uppercase font-mono truncate">RAM</div>
+                        <div id="modal-ram-val" class="text-sm sm:text-lg font-bold text-white mt-0.5 truncate">0 / 0 GB</div>
                     </div>
-                    <div class="bg-slate-950 p-3 rounded-xl border border-slate-800/80">
-                        <div class="text-slate-400 text-[10px] uppercase font-mono">Disk Boş</div>
-                        <div id="modal-disk-val" class="text-lg font-bold text-white mt-1">0 GB</div>
+                    <div class="bg-slate-950 p-2.5 sm:p-3 rounded-xl border border-slate-800/80 text-center sm:text-left">
+                        <div class="text-slate-400 text-[9px] sm:text-[10px] uppercase font-mono truncate">Disk Boş</div>
+                        <div id="modal-disk-val" class="text-sm sm:text-lg font-bold text-white mt-0.5 truncate">0 GB</div>
                     </div>
                 </div>
 
                 <!-- Whitelist Management -->
-                <div class="space-y-3">
+                <div class="space-y-2.5 sm:space-y-3">
                     <div class="flex items-center justify-between">
-                        <span class="font-semibold text-slate-200">İzinli Telegram / Sistem Kullanıcıları</span>
+                        <span class="font-semibold text-slate-200 text-xs">İzinli Kullanıcılar</span>
                         <span id="whitelist-count-badge" class="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono text-[10px]">0 Kullanıcı</span>
                     </div>
 
                     <!-- Add User Form -->
-                    <div class="flex gap-2">
-                        <input id="input-new-whitelist-id" type="number" placeholder="Telegram ID (örn: 12345678)" class="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 outline-none focus:ring-1 focus:ring-purple-500" />
-                        <input id="input-new-whitelist-name" type="text" placeholder="İsim / Nick" class="w-32 bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 outline-none focus:ring-1 focus:ring-purple-500" />
-                        <button id="btn-add-whitelist" class="bg-purple-600 hover:bg-purple-500 text-white font-medium px-3 py-1.5 rounded-lg transition">Ekle</button>
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input id="input-new-whitelist-id" type="number" placeholder="Telegram / User ID (örn: 12345678)" class="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 outline-none focus:ring-1 focus:ring-purple-500" />
+                        <input id="input-new-whitelist-name" type="text" placeholder="İsim / Nick" class="w-full sm:w-28 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 outline-none focus:ring-1 focus:ring-purple-500" />
+                        <button id="btn-add-whitelist" class="bg-purple-600 hover:bg-purple-500 text-white font-medium px-4 py-2 rounded-lg transition touch-manipulation text-center">Ekle</button>
                     </div>
 
                     <!-- Users List -->
-                    <div id="modal-whitelist-list" class="max-h-36 overflow-y-auto space-y-1.5 bg-slate-950 p-2 rounded-xl border border-slate-800">
-                        <div class="text-slate-500 text-center py-2">Yükleniyor...</div>
+                    <div id="modal-whitelist-list" class="max-h-32 sm:max-h-36 overflow-y-auto space-y-1.5 bg-slate-950 p-2 rounded-xl border border-slate-800">
+                        <div class="text-slate-500 text-center py-2 text-xs">Yükleniyor...</div>
                     </div>
                 </div>
             </div>

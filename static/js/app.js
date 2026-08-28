@@ -1,5 +1,5 @@
 /**
- * Antigravity Hub Bridge WebUI JavaScript Client
+ * Antigravity Hub Bridge WebUI JavaScript Client - Mobile & Desktop
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -9,7 +9,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // DOM Elements
     const elements = {
         sidebar: document.getElementById('sidebar'),
+        sidebarBackdrop: document.getElementById('sidebar-backdrop'),
         btnToggleSidebar: document.getElementById('btn-toggle-sidebar'),
+        btnCloseSidebar: document.getElementById('btn-close-sidebar'),
         btnNewChat: document.getElementById('btn-new-chat'),
         selectModel: document.getElementById('select-model'),
         effortBtns: document.querySelectorAll('.effort-btn'),
@@ -31,7 +33,6 @@ document.addEventListener('DOMContentLoaded', () => {
         fileUpload: document.getElementById('file-upload'),
         typingIndicator: document.getElementById('typing-indicator'),
         btnSendPrompt: document.getElementById('btn-send-prompt'),
-        statTurns: document.getElementById('stat-turns'),
         statLatency: document.getElementById('stat-latency'),
         statTokens: document.getElementById('stat-tokens'),
         btnOpenSystemModal: document.getElementById('btn-open-system-modal'),
@@ -136,16 +137,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateBadges() {
         elements.currentModelBadge.textContent = state.model;
-        elements.currentWorkspaceBadge.textContent = state.workspace;
+        if (elements.currentWorkspaceBadge) {
+            elements.currentWorkspaceBadge.textContent = state.workspace;
+        }
     }
 
     function updateEffortUI(effort) {
         state.effort = effort;
         elements.effortBtns.forEach(btn => {
             if (btn.dataset.effort === effort) {
-                btn.className = 'effort-btn py-1 rounded text-center font-medium transition bg-purple-600 text-white shadow-sm';
+                btn.className = 'effort-btn py-2 sm:py-1 rounded text-center font-medium transition bg-purple-600 text-white shadow-sm touch-manipulation';
             } else {
-                btn.className = 'effort-btn py-1 rounded text-center font-medium transition text-slate-400 hover:text-white';
+                btn.className = 'effort-btn py-2 sm:py-1 rounded text-center font-medium transition text-slate-400 hover:text-white touch-manipulation';
             }
         });
     }
@@ -157,18 +160,67 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.whitelistCountBadge.textContent = `${whitelistCount || 0} Kullanıcı`;
     }
 
+    // ---------------- Mobile Sidebar Helpers ---------------- //
+
+    function openMobileSidebar() {
+        if (elements.sidebar) {
+            elements.sidebar.classList.remove('-translate-x-full');
+        }
+        if (elements.sidebarBackdrop) {
+            elements.sidebarBackdrop.classList.remove('hidden');
+        }
+    }
+
+    function closeMobileSidebar() {
+        if (elements.sidebar) {
+            elements.sidebar.classList.add('-translate-x-full');
+        }
+        if (elements.sidebarBackdrop) {
+            elements.sidebarBackdrop.classList.add('hidden');
+        }
+    }
+
+    function toggleMobileSidebar() {
+        if (elements.sidebar && elements.sidebar.classList.contains('-translate-x-full')) {
+            openMobileSidebar();
+        } else {
+            closeMobileSidebar();
+        }
+    }
+
+    function maybeCloseMobileSidebar() {
+        if (window.innerWidth < 1024) {
+            closeMobileSidebar();
+        }
+    }
+
     // ---------------- Event Listeners ---------------- //
 
     function setupEventListeners() {
-        // Toggle Sidebar for mobile
+        // Mobile Sidebar Controls
         if (elements.btnToggleSidebar) {
-            elements.btnToggleSidebar.addEventListener('click', () => {
-                elements.sidebar.classList.toggle('hidden');
-            });
+            elements.btnToggleSidebar.addEventListener('click', toggleMobileSidebar);
+        }
+        if (elements.btnCloseSidebar) {
+            elements.btnCloseSidebar.addEventListener('click', closeMobileSidebar);
+        }
+        if (elements.sidebarBackdrop) {
+            elements.sidebarBackdrop.addEventListener('click', closeMobileSidebar);
         }
 
+        // Keyboard navigation (Esc to close modal or sidebar)
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeMobileSidebar();
+                if (elements.modalSystem) elements.modalSystem.classList.add('hidden');
+            }
+        });
+
         // New Chat
-        elements.btnNewChat.addEventListener('click', resetChat);
+        elements.btnNewChat.addEventListener('click', () => {
+            resetChat();
+            maybeCloseMobileSidebar();
+        });
 
         // Model Change
         elements.selectModel.addEventListener('change', async (e) => {
@@ -212,9 +264,9 @@ document.addEventListener('DOMContentLoaded', () => {
         // Cancel Task
         elements.btnCancelTask.addEventListener('click', cancelTask);
 
-        // Prompt Input Keydown (Enter to send, Shift+Enter for newline)
+        // Prompt Input Keydown (Enter to send on desktop, Shift+Enter for newline)
         elements.inputPrompt.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && !e.shiftKey && window.innerWidth >= 768) {
                 e.preventDefault();
                 submitPrompt();
             }
@@ -236,7 +288,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Whitelist Add
         elements.btnAddWhitelist.addEventListener('click', handleAddWhitelist);
 
-        // Logout
+        // Logout Button
         const btnLogout = document.getElementById('btn-logout');
         if (btnLogout) {
             btnLogout.addEventListener('click', async () => {
@@ -245,7 +297,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        // Quick Chips
+        // Quick Action Chips
         elements.quickChips.forEach(chip => {
             chip.addEventListener('click', () => {
                 const title = chip.querySelector('.font-semibold').textContent;
@@ -285,9 +337,8 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.messagesContainer.innerHTML = '';
             elements.messagesContainer.appendChild(elements.welcomeCard);
             elements.welcomeCard.classList.remove('hidden');
-            elements.statTurns.textContent = 'Turn: 0';
-            elements.statLatency.textContent = 'Latency: --';
-            elements.statTokens.textContent = 'Tokens: --';
+            if (elements.statLatency) elements.statLatency.textContent = '--';
+            if (elements.statTokens) elements.statTokens.textContent = '--';
             elements.attachmentsTray.innerHTML = '';
             elements.attachmentsTray.classList.add('hidden');
             state.attachments = [];
@@ -311,10 +362,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
             data.conversations.forEach(c => {
                 const item = document.createElement('button');
-                item.className = 'w-full text-left p-2 rounded-lg bg-slate-950/50 hover:bg-slate-800/80 transition text-slate-300 text-xs truncate border border-slate-800/40 flex items-center gap-2';
+                item.className = 'w-full text-left p-2.5 sm:p-2 rounded-lg bg-slate-950/50 hover:bg-slate-800/80 active:bg-slate-800 transition text-slate-300 text-xs truncate border border-slate-800/40 flex items-center gap-2 touch-manipulation';
                 const snippet = c.title ? c.title.substring(0, 28) + '...' : c.conversation_id.substring(0, 12);
-                item.innerHTML = `<i data-lucide="message-square" class="w-3 h-3 text-purple-400 shrink-0"></i> <span class="truncate">${snippet}</span>`;
-                item.addEventListener('click', () => loadConversationHistory(c.conversation_id));
+                item.innerHTML = `<i data-lucide="message-square" class="w-3.5 h-3.5 text-purple-400 shrink-0"></i> <span class="truncate">${snippet}</span>`;
+                item.addEventListener('click', () => {
+                    loadConversationHistory(c.conversation_id);
+                    maybeCloseMobileSidebar();
+                });
                 elements.conversationsList.appendChild(item);
             });
             lucide.createIcons();
@@ -370,7 +424,6 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.inputPrompt.value = '';
         elements.attachmentsTray.innerHTML = '';
         elements.attachmentsTray.classList.add('hidden');
-        const currentAttachments = [...state.attachments];
         state.attachments = [];
         autoResizeTextarea(elements.inputPrompt);
 
@@ -456,12 +509,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             cursor.remove();
 
                             const duration = ((performance.now() - startTime) / 1000).toFixed(1);
-                            elements.statLatency.textContent = `Latency: ${duration}s`;
-                            if (event.usage && event.usage.total_tokens) {
-                                elements.statTokens.textContent = `Tokens: ${event.usage.total_tokens.toLocaleString()}`;
-                            }
-                            if (event.num_turns) {
-                                elements.statTurns.textContent = `Turns: ${event.num_turns}`;
+                            if (elements.statLatency) elements.statLatency.textContent = `${duration}s`;
+                            if (event.usage && event.usage.total_tokens && elements.statTokens) {
+                                elements.statTokens.textContent = `${event.usage.total_tokens.toLocaleString()} tok`;
                             }
                             await loadConversations();
                         } else if (type === 'error') {
@@ -529,7 +579,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function appendUserMessage(text, attachments = []) {
         const row = document.createElement('div');
-        row.className = 'flex justify-end';
+        row.className = 'flex justify-end w-full';
 
         let attachmentsHtml = '';
         if (attachments && attachments.length > 0) {
@@ -541,10 +591,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         row.innerHTML = `
-            <div class="max-w-2xl bg-purple-600 text-white rounded-2xl rounded-tr-sm px-4 py-3 shadow-lg space-y-1">
+            <div class="max-w-[90%] sm:max-w-2xl bg-purple-600 text-white rounded-2xl rounded-tr-sm px-3.5 py-2.5 sm:px-4 sm:py-3 shadow-lg space-y-1">
                 ${attachmentsHtml}
-                <div class="text-sm whitespace-pre-wrap leading-relaxed">${escapeHtml(text)}</div>
-                <div class="text-[10px] text-purple-200 text-right opacity-70">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                <div class="text-xs sm:text-sm whitespace-pre-wrap leading-relaxed">${escapeHtml(text)}</div>
+                <div class="text-[9px] sm:text-[10px] text-purple-200 text-right opacity-70">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
             </div>
         `;
         elements.messagesContainer.appendChild(row);
@@ -554,29 +604,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function createAssistantStreamingBubble() {
         const row = document.createElement('div');
-        row.className = 'flex items-start gap-3 max-w-3xl';
+        row.className = 'flex items-start gap-2 sm:gap-3 max-w-full sm:max-w-3xl';
 
         row.innerHTML = `
-            <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center text-white shrink-0 shadow-md mt-1">
-                <i data-lucide="bot" class="w-4 h-4"></i>
+            <div class="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center text-white shrink-0 shadow-md mt-1">
+                <i data-lucide="bot" class="w-3.5 h-3.5 sm:w-4 sm:h-4"></i>
             </div>
-            <div class="flex-1 space-y-2 overflow-hidden">
+            <div class="flex-1 space-y-2 overflow-hidden min-w-0">
                 <!-- Thinking container (collapsible) -->
                 <div class="thinking-container hidden bg-slate-900/90 border border-slate-800 rounded-xl overflow-hidden text-xs">
-                    <button class="w-full flex items-center justify-between px-3 py-2 text-slate-400 hover:text-purple-300 font-mono text-[11px] bg-slate-950/40" onclick="this.nextElementSibling.classList.toggle('hidden')">
+                    <button class="w-full flex items-center justify-between px-3 py-2 text-slate-400 hover:text-purple-300 font-mono text-[10px] sm:text-[11px] bg-slate-950/40 touch-manipulation" onclick="this.nextElementSibling.classList.toggle('hidden')">
                         <span class="flex items-center gap-1.5"><i data-lucide="brain" class="w-3.5 h-3.5 text-purple-400"></i> Düşünme / Akıl Yürütme</span>
                         <i data-lucide="chevron-down" class="w-3 h-3"></i>
                     </button>
-                    <div class="thinking-content p-3 text-slate-400 font-mono text-[11px] whitespace-pre-wrap border-t border-slate-800/60 max-h-48 overflow-y-auto"></div>
+                    <div class="thinking-content p-3 text-slate-400 font-mono text-[10px] sm:text-[11px] whitespace-pre-wrap border-t border-slate-800/60 max-h-48 overflow-y-auto"></div>
                 </div>
 
                 <!-- Tools container -->
                 <div class="tools-container space-y-1.5"></div>
 
                 <!-- Response container -->
-                <div class="bg-slate-900 border border-slate-800/80 rounded-2xl rounded-tl-sm p-4 text-slate-100 shadow-md">
+                <div class="bg-slate-900 border border-slate-800/80 rounded-2xl rounded-tl-sm p-3.5 sm:p-4 text-slate-100 shadow-md">
                     <div class="response-content markdown-body"></div>
-                    <span class="typing-cursor inline-block w-2 h-4 bg-purple-400 animate-pulse ml-0.5 align-middle"></span>
+                    <span class="typing-cursor inline-block w-1.5 sm:w-2 h-3.5 sm:h-4 bg-purple-400 animate-pulse ml-0.5 align-middle"></span>
                 </div>
             </div>
         `;
@@ -597,12 +647,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function appendAssistantMessage(content, metadata) {
         const row = document.createElement('div');
-        row.className = 'flex items-start gap-3 max-w-3xl';
+        row.className = 'flex items-start gap-2 sm:gap-3 max-w-full sm:max-w-3xl';
         row.innerHTML = `
-            <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center text-white shrink-0 shadow-md mt-1">
-                <i data-lucide="bot" class="w-4 h-4"></i>
+            <div class="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center text-white shrink-0 shadow-md mt-1">
+                <i data-lucide="bot" class="w-3.5 h-3.5 sm:w-4 sm:h-4"></i>
             </div>
-            <div class="flex-1 bg-slate-900 border border-slate-800/80 rounded-2xl rounded-tl-sm p-4 text-slate-100 shadow-md markdown-body">
+            <div class="flex-1 bg-slate-900 border border-slate-800/80 rounded-2xl rounded-tl-sm p-3.5 sm:p-4 text-slate-100 shadow-md markdown-body min-w-0">
                 ${marked.parse(content || '')}
             </div>
         `;
@@ -626,12 +676,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         card.className = `tool-card ${isRunning ? 'running' : 'completed'}`;
         card.innerHTML = `
-            <div class="flex items-center gap-2 truncate">
-                <span class="${isRunning ? 'animate-spin text-purple-400' : 'text-emerald-400'}">${icon}</span>
-                <span class="font-mono font-semibold text-slate-200">${escapeHtml(toolName)}</span>
-                <span class="text-slate-400 truncate text-[11px] font-mono">${escapeHtml(argSnippet)}</span>
+            <div class="flex items-center gap-1.5 sm:gap-2 truncate min-w-0">
+                <span class="${isRunning ? 'animate-spin text-purple-400' : 'text-emerald-400'} shrink-0">${icon}</span>
+                <span class="font-mono font-semibold text-slate-200 text-[11px] sm:text-xs shrink-0">${escapeHtml(toolName)}</span>
+                <span class="text-slate-400 truncate text-[10px] sm:text-[11px] font-mono">${escapeHtml(argSnippet)}</span>
             </div>
-            <div class="text-[10px] font-mono text-slate-400 shrink-0">
+            <div class="text-[9px] sm:text-[10px] font-mono text-slate-400 shrink-0">
                 ${isRunning ? '<span class="text-purple-400 animate-pulse">Çalışıyor</span>' : (duration ? `✅ ${duration.toFixed(1)}s` : '✅')}
             </div>
         `;
@@ -706,9 +756,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const pill = document.createElement('div');
             pill.className = 'inline-flex items-center gap-1.5 bg-slate-800 border border-slate-700 text-slate-200 text-xs px-2.5 py-1 rounded-lg shadow-sm';
             pill.innerHTML = `
-                <i data-lucide="paperclip" class="w-3.5 h-3.5 text-purple-400"></i>
-                <span class="truncate max-w-[150px]">${escapeHtml(att.filename)}</span>
-                <button type="button" class="text-slate-400 hover:text-rose-400 p-0.5" onclick="window.removeAttachment(${idx})">
+                <i data-lucide="paperclip" class="w-3 h-3 text-purple-400"></i>
+                <span class="truncate max-w-[120px] sm:max-w-[150px] text-[11px]">${escapeHtml(att.filename)}</span>
+                <button type="button" class="text-slate-400 hover:text-rose-400 p-0.5 touch-manipulation" onclick="window.removeAttachment(${idx})">
                     <i data-lucide="x" class="w-3 h-3"></i>
                 </button>
             `;
@@ -725,6 +775,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ---------------- Whitelist Management ---------------- //
 
     async function openSystemModal() {
+        maybeCloseMobileSidebar();
         elements.modalSystem.classList.remove('hidden');
         await loadStatus();
         await loadWhitelist();
@@ -739,7 +790,7 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.modalWhitelistList.innerHTML = '';
 
             if (!data.users || data.users.length === 0) {
-                elements.modalWhitelistList.innerHTML = '<div class="text-slate-500 text-center py-2">Henüz kullanıcı eklenmedi</div>';
+                elements.modalWhitelistList.innerHTML = '<div class="text-slate-500 text-center py-2 text-xs">Henüz kullanıcı eklenmedi</div>';
                 return;
             }
 
@@ -747,12 +798,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const item = document.createElement('div');
                 item.className = 'flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800 text-xs';
                 item.innerHTML = `
-                    <div class="flex items-center gap-2">
-                        <span class="font-mono text-purple-300 font-semibold">${u.user_id}</span>
-                        <span class="text-slate-400">${escapeHtml(u.username || u.full_name || 'İsimsiz')}</span>
-                        <span class="px-1.5 py-0.2 rounded bg-slate-800 text-[10px] text-slate-400">${u.role}</span>
+                    <div class="flex items-center gap-2 truncate min-w-0">
+                        <span class="font-mono text-purple-300 font-semibold shrink-0">${u.user_id}</span>
+                        <span class="text-slate-400 truncate">${escapeHtml(u.username || u.full_name || 'İsimsiz')}</span>
+                        <span class="px-1.5 py-0.2 rounded bg-slate-800 text-[10px] text-slate-400 shrink-0">${u.role}</span>
                     </div>
-                    <button class="text-slate-500 hover:text-rose-400 p-1" onclick="window.removeWhitelistUser(${u.user_id})">
+                    <button class="text-slate-500 hover:text-rose-400 p-1.5 touch-manipulation" onclick="window.removeWhitelistUser(${u.user_id})">
                         <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                     </button>
                 `;
@@ -803,7 +854,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function autoResizeTextarea(textarea) {
         textarea.style.height = 'auto';
-        textarea.style.height = Math.min(textarea.scrollHeight, 180) + 'px';
+        textarea.style.height = Math.min(textarea.scrollHeight, 140) + 'px';
     }
     elements.inputPrompt.addEventListener('input', () => autoResizeTextarea(elements.inputPrompt));
 

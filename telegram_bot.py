@@ -36,6 +36,7 @@ from formatter import (
     markdown_to_telegram_html,
     split_text_chunks,
     format_tool_status,
+    format_cumulative_status_telegram,
     format_execution_stages_telegram,
     format_stats_footer,
     escape_html
@@ -572,7 +573,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
                             "duration_seconds": duration
                         })
 
-                    current_status = format_tool_status(tool_name, tool_info, state, duration)
+                    current_status = format_cumulative_status_telegram(executed_tools)
 
                     # Update status message with debouncing
                     now = time.time()

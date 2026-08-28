@@ -102,3 +102,19 @@ def test_format_tool_diff_telegram():
     assert "<b>🛠️ İşlem Aşamaları & Kod Farkları:</b>" in stages_res
     assert "test.py" in stages_res
     assert "pytest" in stages_res
+
+
+def test_format_cumulative_status_telegram():
+    from formatter import format_cumulative_status_telegram
+
+    tools = [
+        {"tool_name": "view_file", "tool_info": {"TargetFile": "app.py"}, "state": "completed", "duration_seconds": 0.3},
+        {"tool_name": "run_command", "tool_info": {"CommandLine": "pytest"}, "state": "running", "duration_seconds": None}
+    ]
+    res = format_cumulative_status_telegram(tools)
+    assert "⚙️ <b>İşlem Adımları:</b>" in res
+    assert "view_file" in res
+    assert "app.py" in res
+    assert "0.3s" in res
+    assert "run_command" in res
+    assert "pytest" in res

@@ -250,6 +250,31 @@ def format_tool_diff_telegram(tool_name: str, tool_info: dict) -> str:
     return f"⚙️ <b>İşlem:</b> <code>{escape_html(tool_name)}</code>"
 
 
+def format_cumulative_status_telegram(tools: List[dict]) -> str:
+    """
+    Format all executed and currently running tool stages into a cumulative live progress message.
+    Preserves all previous stages while updating the active stage.
+    """
+    if not tools:
+        return "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>"
+
+    lines = ["⚙️ <b>İşlem Adımları:</b>\n"]
+    for t in tools:
+        t_name = t.get("tool_name", "")
+        t_info = t.get("tool_info", {})
+        state = t.get("state", "running")
+        duration = t.get("duration_seconds")
+        line = format_tool_status(t_name, t_info, state, duration)
+        lines.append(f"• {line}")
+
+    full_text = "\n".join(lines)
+    # Ensure length doesn't exceed Telegram message edit limits (~3800 chars)
+    if len(full_text) > 3500:
+        truncated = lines[:3] + ["• ..."] + lines[-8:]
+        full_text = "\n".join(truncated)
+    return full_text
+
+
 def format_execution_stages_telegram(tools: List[dict]) -> str:
     """Format a list of executed tool stages into a Telegram HTML section."""
     if not tools:

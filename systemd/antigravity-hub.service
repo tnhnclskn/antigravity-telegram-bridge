@@ -1,0 +1,19 @@
+[Unit]
+Description=Antigravity Hub Bridge Daemon (WebUI & Telegram)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/Projects/antigravity-hub-bridge
+EnvironmentFile=-/root/Projects/antigravity-hub-bridge/.env
+Environment=PYTHONUNBUFFERED=1
+Environment="PATH=/root/Projects/antigravity-hub-bridge/venv/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/root/Projects/antigravity-hub-bridge/venv/bin/python3 /root/Projects/antigravity-hub-bridge/main.py
+Restart=always
+RestartSec=5s
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

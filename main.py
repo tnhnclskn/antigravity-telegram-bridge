@@ -1,15 +1,16 @@
 """
-Main entry point for Antigravity Telegram Bridge.
-Initializes the database, builds the Telegram bot application, and runs the polling loop.
+Main entry point for Antigravity Hub Bridge.
+Coordinates SQLite database, FastAPI WebUI server, and Telegram Bot services.
+Allows running Telegram, WebUI, or both concurrently based on .env configuration.
 """
 
 import asyncio
 import logging
 import signal
 import sys
+import uvicorn
 from config import settings
 from database import db
-from telegram_bot import build_application
 
 # Configure structured logging
 logging.basicConfig(
@@ -17,37 +18,26 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
     level=getattr(logging, settings.LOG_LEVEL, logging.INFO)
 )
-logger = logging.getLogger("antigravity_bridge")
+logger = logging.getLogger("antigravity_hub")
 
 
 async def main():
     logger.info("==================================================")
-    logger.info("Starting Antigravity Telegram Bridge Daemon...")
+    logger.info("Starting Antigravity Hub Bridge Daemon...")
     logger.info(f"Workspace: {settings.DEFAULT_WORKSPACE}")
     logger.info(f"CLI Binary: {settings.AGY_BIN_PATH}")
     logger.info(f"Default Model: {settings.DEFAULT_MODEL}")
     logger.info(f"Database Path: {settings.DB_PATH}")
+    logger.info(f"Services Enabled -> WebUI: {settings.ENABLE_WEBUI} (Port {settings.WEBUI_PORT}) | Telegram: {settings.ENABLE_TELEGRAM}")
     logger.info("==================================================")
 
     # 1. Initialize SQLite Database
     await db.init()
 
-    # 2. Build Telegram Application
-    app = build_application()
-
-    # 3. Setup lifecycle and polling
-    await app.initialize()
-    await app.start()
-    
-    bot_info = await app.bot.get_me()
-    logger.info(f"Bot successfully authenticated as @{bot_info.username} (ID: {bot_info.id})")
-    logger.info("Starting update poller...")
-
-    await app.updater.start_polling(allowed_updates=["message", "callback_query"])
-
-    # Graceful stop event
+    tasks = []
     stop_event = asyncio.Event()
 
+    # Graceful shutdown handler
     def handle_signal(sig, frame):
         logger.info(f"Received signal {sig}, initiating graceful shutdown...")
         stop_event.set()
@@ -55,16 +45,68 @@ async def main():
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
+    # 2. Start WebUI Server if enabled
+    web_server = None
+    if settings.ENABLE_WEBUI:
+        from web_server import app as fastapi_app
+        config = uvicorn.Config(
+            app=fastapi_app,
+            host=settings.WEBUI_HOST,
+            port=settings.WEBUI_PORT,
+            log_level=settings.LOG_LEVEL.lower(),
+            access_log=False
+        )
+        web_server = uvicorn.Server(config=config)
+        logger.info(f"Starting WebUI server on http://{settings.WEBUI_HOST}:{settings.WEBUI_PORT} ...")
+        tasks.append(asyncio.create_task(web_server.serve()))
+
+    # 3. Start Telegram Bot if enabled
+    tg_app = None
+    if settings.ENABLE_TELEGRAM:
+        if not settings.TELEGRAM_BOT_TOKEN:
+            logger.error("ENABLE_TELEGRAM is True but TELEGRAM_BOT_TOKEN is not set in .env!")
+        else:
+            from telegram_bot import build_application
+            tg_app = build_application()
+            await tg_app.initialize()
+            await tg_app.start()
+
+            bot_info = await tg_app.bot.get_me()
+            logger.info(f"Telegram Bot authenticated as @{bot_info.username} (ID: {bot_info.id})")
+            logger.info("Starting Telegram update poller...")
+
+            await tg_app.updater.start_polling(allowed_updates=["message", "callback_query"])
+
+    if not settings.ENABLE_WEBUI and not settings.ENABLE_TELEGRAM:
+        logger.warning("Neither WebUI nor Telegram is enabled! Please set ENABLE_WEBUI=true or ENABLE_TELEGRAM=true in .env")
+        return
+
     try:
-        # Keep running until stop signal received
+        # Wait until stop signal received
         while not stop_event.is_set():
             await asyncio.sleep(1)
     finally:
-        logger.info("Stopping updater and bot application...")
-        await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
-        logger.info("Antigravity Telegram Bridge stopped cleanly.")
+        logger.info("Initiating cleanup and stopping services...")
+
+        if web_server:
+            logger.info("Stopping WebUI server...")
+            web_server.should_exit = True
+
+        if tg_app:
+            logger.info("Stopping Telegram poller and bot application...")
+            try:
+                await tg_app.updater.stop()
+                await tg_app.stop()
+                await tg_app.shutdown()
+            except Exception as e:
+                logger.warning(f"Error while shutting down Telegram app: {e}")
+
+        # Cancel remaining background tasks
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+
+        logger.info("Antigravity Hub Bridge stopped cleanly.")
 
 
 if __name__ == "__main__":

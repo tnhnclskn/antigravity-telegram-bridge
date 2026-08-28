@@ -1,6 +1,7 @@
 """
 Antigravity CLI Client wrapper.
 Executes the `agy` CLI as an asynchronous subprocess and streams structured events.
+Supports multiple concurrent users/sessions across Telegram and WebUI.
 """
 
 import asyncio
@@ -8,8 +9,10 @@ import json
 import logging
 import os
 import signal
+import shutil
+import psutil
 from pathlib import Path
-from typing import AsyncGenerator, Dict, Any, Optional
+from typing import AsyncGenerator, Dict, Any, Optional, List, Union
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -18,25 +21,30 @@ logger = logging.getLogger(__name__)
 class AgyClient:
     def __init__(self, bin_path: Optional[str] = None):
         self.bin_path = bin_path or settings.AGY_BIN_PATH
-        self._active_processes: Dict[int, asyncio.subprocess.Process] = {}
+        self._active_processes: Dict[Union[int, str], asyncio.subprocess.Process] = {}
 
-    def cancel_task(self, user_id: int) -> bool:
-        """Cancel an ongoing agy process for a specific user."""
+    def cancel_task(self, user_id: Union[int, str]) -> bool:
+        """Cancel an ongoing agy process for a specific user or web session."""
         proc = self._active_processes.get(user_id)
         if proc and proc.returncode is None:
             try:
                 proc.send_signal(signal.SIGTERM)
-                logger.info(f"Sent SIGTERM to agy process {proc.pid} for user {user_id}")
+                logger.info(f"Sent SIGTERM to agy process {proc.pid} for user/session {user_id}")
                 return True
             except ProcessLookupError:
                 pass
             except Exception as e:
-                logger.error(f"Error terminating process for user {user_id}: {e}")
+                logger.error(f"Error terminating process for user/session {user_id}: {e}")
         return False
+
+    def is_running(self, user_id: Union[int, str]) -> bool:
+        """Check if a process is actively running for a user/session."""
+        proc = self._active_processes.get(user_id)
+        return proc is not None and proc.returncode is None
 
     async def run_prompt_stream(
         self,
-        user_id: int,
+        user_id: Union[int, str],
         prompt: str,
         conversation_id: Optional[str] = None,
         workspace: Optional[str] = None,
@@ -73,7 +81,7 @@ class AgyClient:
         if workspace_dir:
             cmd.extend(["--add-dir", workspace_dir])
 
-        logger.info(f"Starting agy subprocess for user {user_id}: {' '.join(cmd[:6])}...")
+        logger.info(f"Starting agy subprocess for session {user_id}: {' '.join(cmd[:6])}...")
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -165,7 +173,7 @@ class AgyClient:
 
             if process.returncode != 0 and process.returncode != -signal.SIGTERM:
                 error_msg = "\n".join(stderr_output) or f"Process exited with code {process.returncode}"
-                logger.error(f"agy process failed for user {user_id}: {error_msg}")
+                logger.error(f"agy process failed for session {user_id}: {error_msg}")
                 yield {
                     "type": "error",
                     "error": error_msg,
@@ -176,7 +184,7 @@ class AgyClient:
             self.cancel_task(user_id)
             raise
         except Exception as e:
-            logger.exception(f"Unexpected exception while running agy for user {user_id}")
+            logger.exception(f"Unexpected exception while running agy for session {user_id}")
             yield {
                 "type": "error",
                 "error": str(e)
@@ -184,7 +192,7 @@ class AgyClient:
         finally:
             self._active_processes.pop(user_id, None)
 
-    async def get_available_models(self) -> list[str]:
+    async def get_available_models(self) -> List[str]:
         """Fetch available models from `agy models`."""
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -198,7 +206,7 @@ class AgyClient:
             models = []
             for line in output.splitlines():
                 line = line.strip()
-                if not line or "Fetching" in line:
+                if not line or "Fetching" in line or line.startswith("#"):
                     continue
                 # First column is model name
                 parts = line.split()
@@ -208,6 +216,37 @@ class AgyClient:
         except Exception as e:
             logger.error(f"Failed to fetch models: {e}")
             return ["gemini-3.7-flash-high", "gemini-3.1-pro-high", "claude-sonnet-4-6"]
+
+    @staticmethod
+    def get_system_stats() -> Dict[str, Any]:
+        """Fetch system statistics (CPU, RAM, Disk)."""
+        try:
+            cpu_percent = psutil.cpu_percent(interval=0.1)
+            mem = psutil.virtual_memory()
+            disk = psutil.disk_usage("/")
+            return {
+                "cpu_percent": cpu_percent,
+                "memory_total_gb": round(mem.total / (1024 ** 3), 2),
+                "memory_used_gb": round(mem.used / (1024 ** 3), 2),
+                "memory_percent": mem.percent,
+                "disk_total_gb": round(disk.total / (1024 ** 3), 2),
+                "disk_used_gb": round(disk.used / (1024 ** 3), 2),
+                "disk_free_gb": round(disk.free / (1024 ** 3), 2),
+                "disk_percent": disk.percent
+            }
+        except Exception as e:
+            logger.warning(f"Failed to get psutil stats: {e}")
+            total, used, free = shutil.disk_usage("/")
+            return {
+                "cpu_percent": 0,
+                "memory_total_gb": 0,
+                "memory_used_gb": 0,
+                "memory_percent": 0,
+                "disk_total_gb": round(total / (1024 ** 3), 2),
+                "disk_used_gb": round(used / (1024 ** 3), 2),
+                "disk_free_gb": round(free / (1024 ** 3), 2),
+                "disk_percent": round((used / total) * 100, 1)
+            }
 
 
 agy_client = AgyClient()

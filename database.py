@@ -1,13 +1,14 @@
 """
-Database module for Antigravity Telegram Bridge.
+Database module for Antigravity Hub Bridge.
 Uses SQLite with aiosqlite for asynchronous persistent storage.
+Supports both Telegram users and WebUI sessions.
 """
 
 import aiosqlite
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ class Database:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("PRAGMA journal_mode=WAL;")
             
-            # User sessions table
+            # User / Web sessions table
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS user_sessions (
                     user_id INTEGER PRIMARY KEY,
@@ -50,6 +51,7 @@ class Database:
                     conversation_id TEXT,
                     role TEXT,
                     content TEXT,
+                    metadata TEXT,
                     timestamp TEXT
                 )
             """)
@@ -142,8 +144,8 @@ class Database:
 
     # ---------------- Session Management ---------------- #
 
-    async def get_session(self, user_id: int) -> Dict[str, Any]:
-        """Get or create session settings for user."""
+    async def get_session(self, user_id: int = 0) -> Dict[str, Any]:
+        """Get or create session settings for user (default 0 for WebUI)."""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             now = _utc_now_str()
@@ -168,7 +170,7 @@ class Database:
                 row = await cursor.fetchone()
                 return dict(row) if row else default_session
 
-    async def update_session(self, user_id: int, **kwargs):
+    async def update_session(self, user_id: int = 0, **kwargs):
         """Update session fields."""
         if not kwargs:
             return
@@ -180,7 +182,7 @@ class Database:
             await db.execute(f"UPDATE user_sessions SET {fields} WHERE user_id = :user_id", kwargs)
             await db.commit()
 
-    async def reset_session(self, user_id: int) -> str:
+    async def reset_session(self, user_id: int = 0) -> str:
         """Reset conversation ID to start a fresh Antigravity session."""
         now = _utc_now_str()
         async with aiosqlite.connect(self.db_path) as db:
@@ -194,26 +196,53 @@ class Database:
 
     # ---------------- Message History ---------------- #
 
-    async def add_history(self, user_id: int, conversation_id: Optional[str], role: str, content: str):
+    async def add_history(self, user_id: int, conversation_id: Optional[str], role: str, content: str, metadata: Optional[str] = None):
         now = _utc_now_str()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
-                INSERT INTO message_history (user_id, conversation_id, role, content, timestamp)
-                VALUES (?, ?, ?, ?, ?)
-            """, (user_id, conversation_id, role, content, now))
+                INSERT INTO message_history (user_id, conversation_id, role, content, metadata, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (user_id, conversation_id, role, content, metadata, now))
             await db.commit()
 
-    async def get_history(self, user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+    async def get_history(self, user_id: int = 0, conversation_id: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute("""
-                SELECT * FROM message_history
-                WHERE user_id = ?
-                ORDER BY id DESC
-                LIMIT ?
-            """, (user_id, limit)) as cursor:
+            if conversation_id:
+                query = "SELECT * FROM message_history WHERE conversation_id = ? ORDER BY id ASC LIMIT ?"
+                params = (conversation_id, limit)
+            else:
+                query = "SELECT * FROM message_history WHERE user_id = ? ORDER BY id DESC LIMIT ?"
+                params = (user_id, limit)
+
+            async with db.execute(query, params) as cursor:
                 rows = await cursor.fetchall()
-                return [dict(r) for r in reversed(rows)]
+                result = [dict(r) for r in rows]
+                if not conversation_id:
+                    result.reverse()
+                return result
+
+    async def get_recent_conversations(self, user_id: int = 0, limit: int = 20) -> List[Dict[str, Any]]:
+        """Get distinct recent conversations with last message snippet."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            query = """
+                SELECT conversation_id, MAX(timestamp) as last_activity,
+                       (SELECT content FROM message_history m2 WHERE m2.conversation_id = m1.conversation_id ORDER BY id ASC LIMIT 1) as title
+                FROM message_history m1
+                WHERE user_id = ? AND conversation_id IS NOT NULL AND conversation_id != ''
+                GROUP BY conversation_id
+                ORDER BY last_activity DESC
+                LIMIT ?
+            """
+            async with db.execute(query, (user_id, limit)) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(r) for r in rows]
+
+    async def clear_history(self, user_id: int = 0):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM message_history WHERE user_id = ?", (user_id,))
+            await db.commit()
 
 
 db = Database()

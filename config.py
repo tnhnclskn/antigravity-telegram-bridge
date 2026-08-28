@@ -1,6 +1,6 @@
 """
-Configuration module for Antigravity Telegram Bridge.
-Loads environment variables and provides structured settings.
+Configuration module for Antigravity Hub Bridge.
+Loads environment variables and provides structured settings for Telegram and WebUI services.
 """
 
 import os
@@ -39,7 +39,20 @@ class Settings:
     BASE_DIR: Path = BASE_DIR
     DATA_DIR: Path = BASE_DIR / "data"
     ATTACHMENTS_DIR: Path = DATA_DIR / "attachments"
+    STATIC_DIR: Path = BASE_DIR / "static"
+    TEMPLATES_DIR: Path = BASE_DIR / "templates"
     DB_PATH: Path = DATA_DIR / "bridge.db"
+
+    # Service toggles
+    ENABLE_TELEGRAM: bool = _get_bool("ENABLE_TELEGRAM", False)
+    ENABLE_WEBUI: bool = _get_bool("ENABLE_WEBUI", True)
+
+    # WebUI Settings
+    WEBUI_HOST: str = os.getenv("WEBUI_HOST", "0.0.0.0").strip()
+    WEBUI_PORT: int = int(os.getenv("WEBUI_PORT", "8000"))
+    WEBUI_AUTH_ENABLED: bool = _get_bool("WEBUI_AUTH_ENABLED", False)
+    WEBUI_PASSWORD: str = os.getenv("WEBUI_PASSWORD", "").strip()
+    WEBUI_TITLE: str = os.getenv("WEBUI_TITLE", "Antigravity Hub").strip()
 
     # Telegram Bot Settings
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -72,13 +85,15 @@ class Settings:
         """Ensure necessary data directories exist."""
         cls.DATA_DIR.mkdir(parents=True, exist_ok=True)
         cls.ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        cls.STATIC_DIR.mkdir(parents=True, exist_ok=True)
+        cls.TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 
     @classmethod
     def validate(cls):
         """Validate critical configuration parameters."""
         cls.ensure_directories()
-        if not cls.TELEGRAM_BOT_TOKEN:
-            raise ValueError("TELEGRAM_BOT_TOKEN is not set. Please provide a valid bot token in .env")
+        if cls.ENABLE_TELEGRAM and not cls.TELEGRAM_BOT_TOKEN:
+            raise ValueError("ENABLE_TELEGRAM is true but TELEGRAM_BOT_TOKEN is not set. Please provide a valid bot token in .env")
         if not os.path.isfile(cls.AGY_BIN_PATH) and not shutil.which(cls.AGY_BIN_PATH):
             raise FileNotFoundError(f"Antigravity CLI binary not found at: {cls.AGY_BIN_PATH}")
 

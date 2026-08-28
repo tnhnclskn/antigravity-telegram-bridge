@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
 # ====================================================================
-# Antigravity Telegram Bridge - Service Control Utility
+# Antigravity Hub Bridge - Service Control Utility
 # ====================================================================
 
-SERVICE_NAME="antigravity-telegram.service"
+SERVICE_NAME="antigravity-hub.service"
 
 case "$1" in
     start)

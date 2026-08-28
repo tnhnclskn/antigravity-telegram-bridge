@@ -65,19 +65,20 @@ class Database:
                 )
             """)
 
-            # Pre-populate whitelist from settings if provided
-            for uid in settings.ALLOWED_USER_IDS:
-                await db.execute("""
-                    INSERT OR IGNORE INTO whitelisted_users (user_id, role, created_at)
-                    VALUES (?, 'user', ?)
-                """, (uid, _utc_now_str()))
+            # Pre-populate whitelist from settings if provided for main db
+            if self.db_path == settings.DB_PATH:
+                for uid in settings.ALLOWED_USER_IDS:
+                    await db.execute("""
+                        INSERT OR IGNORE INTO whitelisted_users (user_id, role, created_at)
+                        VALUES (?, 'user', ?)
+                    """, (uid, _utc_now_str()))
 
-            for uid in settings.ADMIN_USER_IDS:
-                await db.execute("""
-                    INSERT INTO whitelisted_users (user_id, role, created_at)
-                    VALUES (?, 'admin', ?)
-                    ON CONFLICT(user_id) DO UPDATE SET role='admin'
-                """, (uid, _utc_now_str()))
+                for uid in settings.ADMIN_USER_IDS:
+                    await db.execute("""
+                        INSERT INTO whitelisted_users (user_id, role, created_at)
+                        VALUES (?, 'admin', ?)
+                        ON CONFLICT(user_id) DO UPDATE SET role='admin'
+                    """, (uid, _utc_now_str()))
 
             await db.commit()
         logger.info(f"Database initialized at {self.db_path}")

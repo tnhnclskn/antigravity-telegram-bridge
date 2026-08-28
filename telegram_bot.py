@@ -613,14 +613,23 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
     await db.add_history(user_id, conversation_id, "user", prompt_text)
     await db.add_history(user_id, conversation_id, "assistant", accumulated_response, metadata=metadata_str)
 
-    # Convert markdown to Telegram HTML
-    formatted_html = markdown_to_telegram_html(accumulated_response)
-
-    # Prepend executed tool stages & file diffs if any
+    # 5a. Finalize the stages status message
     if executed_tools:
         stages_summary = format_execution_stages_telegram(executed_tools)
         if stages_summary:
-            formatted_html = f"{stages_summary}\n\n{formatted_html}"
+            try:
+                await status_msg.edit_text(stages_summary, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            except Exception as e:
+                logger.warning(f"Failed to edit status message with final stages: {e}")
+    else:
+        # If no tools were executed, delete the temporary 'Thinking...' progress message
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+
+    # 5b. Convert markdown to Telegram HTML for the final result text
+    formatted_html = markdown_to_telegram_html(accumulated_response)
 
     # Add footer if stats are available
     if final_result_data:
@@ -632,22 +641,18 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
     # Split into message chunks safe for Telegram (<= 3800 chars)
     chunks = split_text_chunks(formatted_html, max_chars=settings.MAX_TELEGRAM_MESSAGE_LEN)
 
-    # Send or edit first chunk
+    # Send final result as a BRAND NEW message so it triggers a fresh notification & sound
     try:
-        if chunks:
-            await status_msg.edit_text(chunks[0], parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-            for subsequent_chunk in chunks[1:]:
-                await message.reply_text(subsequent_chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        for chunk in chunks:
+            await message.reply_text(chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
     except Exception as e:
-        logger.warning(f"HTML send failed, falling back to plain text: {e}")
-        # Fallback to plain text if HTML parsing failed
+        logger.warning(f"HTML reply failed, falling back to plain text: {e}")
         plain_chunks = split_text_chunks(accumulated_response, max_chars=settings.MAX_TELEGRAM_MESSAGE_LEN)
-        try:
-            await status_msg.edit_text(plain_chunks[0])
-            for ch in plain_chunks[1:]:
+        for ch in plain_chunks:
+            try:
                 await message.reply_text(ch)
-        except Exception as fallback_err:
-            logger.error(f"Fallback plain text send also failed: {fallback_err}")
+            except Exception as fallback_err:
+                logger.error(f"Fallback plain text reply failed: {fallback_err}")
 
 
 # ---------------- Application Setup ---------------- #

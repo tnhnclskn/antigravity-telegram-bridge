@@ -67,6 +67,12 @@ class Database:
                 )
             """)
 
+            # Schema Migration: Ensure metadata column exists in message_history
+            async with db.execute("PRAGMA table_info(message_history)") as cursor:
+                columns = [row[1] for row in await cursor.fetchall()]
+                if "metadata" not in columns:
+                    await db.execute("ALTER TABLE message_history ADD COLUMN metadata TEXT;")
+
             # Pre-populate whitelist from settings if provided for main db
             if self.db_path == settings.DB_PATH:
                 for uid in settings.ALLOWED_USER_IDS:

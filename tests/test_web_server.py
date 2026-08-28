@@ -120,3 +120,42 @@ async def test_whitelist_endpoints_with_auth(tmp_path: Path, monkeypatch):
         # Delete user
         del_res = await ac.delete("/api/whitelist/987654")
         assert del_res.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_endpoint(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(db, "db_path", tmp_path / "test_chat.db")
+    monkeypatch.setattr(settings, "WEBUI_AUTH_ENABLED", True)
+    monkeypatch.setattr(settings, "WEBUI_AUTH_TOKEN", "valid_token_xyz")
+    await db.init()
+
+    # Mock agy_client.run_prompt_stream to yield sample events
+    async def mock_run_prompt_stream(*args, **kwargs):
+        yield {"type": "init", "conversation_id": "test-conv-123"}
+        yield {"type": "step_update", "step_type": "text", "text_delta": "Hello from AI"}
+        yield {"type": "result", "response": "Hello from AI", "duration_seconds": 0.5, "usage": {"total_tokens": 10}}
+
+    from agy_client import agy_client
+    monkeypatch.setattr(agy_client, "run_prompt_stream", mock_run_prompt_stream)
+
+    transport = ASGITransport(app=app)
+    auth_headers = {"Authorization": "Bearer valid_token_xyz"}
+    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers) as ac:
+        response = await ac.post("/api/chat/stream", json={
+            "prompt": "Test prompt",
+            "user_id": 0
+        })
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers.get("content-type", "")
+        body = response.text
+        assert "event: init" in body
+        assert "event: step_update" in body
+        assert "event: result" in body
+
+        # Verify history saved to db
+        history = await db.get_history(user_id=0)
+        assert len(history) == 2
+        assert history[0]["role"] == "user"
+        assert history[0]["content"] == "Test prompt"
+        assert history[1]["role"] == "assistant"
+        assert history[1]["content"] == "Hello from AI"

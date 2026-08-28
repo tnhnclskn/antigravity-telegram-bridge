@@ -4,6 +4,7 @@ Manages conversations, streaming feedback, media handling, and admin controls.
 """
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -529,6 +530,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
     last_status_text = ""
     accumulated_response = ""
     final_result_data = None
+    executed_tools: List[Dict[str, Any]] = []
 
     try:
         # 4. Stream response from Antigravity CLI

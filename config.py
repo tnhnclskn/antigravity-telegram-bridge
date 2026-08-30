@@ -43,6 +43,7 @@ class Settings:
     STATIC_DIR: Path = BASE_DIR / "static"
     TEMPLATES_DIR: Path = BASE_DIR / "templates"
     DB_PATH: Path = DATA_DIR / "bridge.db"
+    PENDING_RESTART_FILE: Path = DATA_DIR / "pending_restart.json"
 
     # Service toggles
     ENABLE_TELEGRAM: bool = _get_bool("ENABLE_TELEGRAM", False)

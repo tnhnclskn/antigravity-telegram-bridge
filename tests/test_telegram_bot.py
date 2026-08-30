@@ -40,6 +40,8 @@ async def setup_test_db(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(telegram_bot, "db", test_db)
     monkeypatch.setattr("database.db", test_db)
     monkeypatch.setattr(settings, "AUTO_WHITELIST_FIRST_USER", True)
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(settings, "PENDING_RESTART_FILE", tmp_path / "pending_restart.json")
     await test_db.init()
     return test_db
 
@@ -95,9 +97,64 @@ async def test_bot_commands_list_and_post_init():
 
     mock_app = MagicMock()
     mock_app.bot.set_my_commands = AsyncMock()
+    mock_app.bot.send_message = AsyncMock()
 
     await post_init(mock_app)
     mock_app.bot.set_my_commands.assert_awaited_once_with(BOT_COMMANDS)
+
+
+@pytest.mark.asyncio
+async def test_post_init_with_pending_restart_notification():
+    """Verify that post_init sends notification to chat_id if pending_restart.json exists and then removes file."""
+    import json
+    settings.PENDING_RESTART_FILE.write_text(json.dumps({"chat_id": 999111, "timestamp": 1700000000.0}))
+    assert settings.PENDING_RESTART_FILE.exists()
+
+    mock_app = MagicMock()
+    mock_app.bot.set_my_commands = AsyncMock()
+    mock_app.bot.send_message = AsyncMock()
+
+    await post_init(mock_app)
+
+    mock_app.bot.send_message.assert_awaited_once()
+    call_kwargs = mock_app.bot.send_message.call_args[1]
+    assert call_kwargs["chat_id"] == 999111
+    assert "Sistem başarıyla yeniden başlatıldı ve köprü şu an aktif!" in call_kwargs["text"]
+    assert "✅" in call_kwargs["text"]
+    assert not settings.PENDING_RESTART_FILE.exists()
+
+
+@pytest.mark.asyncio
+async def test_post_init_corrupted_pending_restart_file():
+    """Verify that post_init handles corrupted pending_restart.json gracefully without crashing."""
+    settings.PENDING_RESTART_FILE.write_text("invalid json content")
+    assert settings.PENDING_RESTART_FILE.exists()
+
+    mock_app = MagicMock()
+    mock_app.bot.set_my_commands = AsyncMock()
+    mock_app.bot.send_message = AsyncMock()
+
+    await post_init(mock_app)
+
+    mock_app.bot.send_message.assert_not_called()
+    assert not settings.PENDING_RESTART_FILE.exists()
+
+
+@pytest.mark.asyncio
+async def test_post_init_send_message_failure_still_cleans_file():
+    """Verify that pending_restart.json is cleaned up even if send_message raises an exception."""
+    import json
+    settings.PENDING_RESTART_FILE.write_text(json.dumps({"chat_id": 999111, "timestamp": 1700000000.0}))
+    assert settings.PENDING_RESTART_FILE.exists()
+
+    mock_app = MagicMock()
+    mock_app.bot.set_my_commands = AsyncMock()
+    mock_app.bot.send_message = AsyncMock(side_effect=Exception("Telegram connection error"))
+
+    await post_init(mock_app)
+
+    mock_app.bot.send_message.assert_awaited_once()
+    assert not settings.PENDING_RESTART_FILE.exists()
 
 
 @pytest.mark.asyncio
@@ -676,7 +733,8 @@ async def test_handle_incoming_message_no_tools_deletes_thinking_message(monkeyp
 
 @pytest.mark.asyncio
 async def test_restart_command_success(monkeypatch):
-    """Test /restart command sends confirmation message and triggers background service restart."""
+    """Test /restart command sends confirmation message, saves pending restart file, and triggers background service restart."""
+    import json
     update = create_mock_update(user_id=1030, username="user30", text="/restart")
     context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
 
@@ -689,12 +747,19 @@ async def test_restart_command_success(monkeypatch):
     sent_text = update.message.reply_text.call_args[0][0]
     assert "Köprü servisi yeniden başlatılıyor..." in sent_text
 
+    # Verify pending restart file was created
+    assert settings.PENDING_RESTART_FILE.exists()
+    data = json.loads(settings.PENDING_RESTART_FILE.read_text(encoding="utf-8"))
+    assert data["chat_id"] == 1030
+    assert "timestamp" in data
+
     mock_os_system.assert_called_once_with("sleep 1 && systemctl --user restart antigravity-hub.service &")
 
 
 @pytest.mark.asyncio
 async def test_restart_command_callback_query(monkeypatch):
-    """Test restart triggered via callback query."""
+    """Test restart triggered via callback query saves pending restart file."""
+    import json
     update = MagicMock(spec=Update)
     user = MagicMock(spec=User)
     user.id = 1031
@@ -702,15 +767,19 @@ async def test_restart_command_callback_query(monkeypatch):
     user.first_name = "UserThirtyOne"
     user.full_name = "User Thirty One"
 
+    chat = MagicMock(spec=Chat)
+    chat.id = 1031
+
     query = AsyncMock(spec=CallbackQuery)
     query.from_user = user
     query.data = "cmd_restart"
     query.answer = AsyncMock()
     query.message = AsyncMock()
+    query.message.chat_id = 1031
     query.message.reply_text = AsyncMock()
 
     update.effective_user = user
-    update.effective_chat = user
+    update.effective_chat = chat
     update.message = None
     update.callback_query = query
 
@@ -723,6 +792,12 @@ async def test_restart_command_callback_query(monkeypatch):
     query.message.reply_text.assert_awaited_once()
     sent_text = query.message.reply_text.call_args[0][0]
     assert "Köprü servisi yeniden başlatılıyor..." in sent_text
+
+    # Verify pending restart file was created
+    assert settings.PENDING_RESTART_FILE.exists()
+    data = json.loads(settings.PENDING_RESTART_FILE.read_text(encoding="utf-8"))
+    assert data["chat_id"] == 1031
+
     mock_os_system.assert_called_once_with("sleep 1 && systemctl --user restart antigravity-hub.service &")
 
 

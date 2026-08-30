@@ -77,13 +77,46 @@ PROJECTS_TO_UPDATE = [
 ]
 
 
+async def check_pending_restart_notification(application: Application):
+    """Check for pending restart notification, send message to user, and remove marker file."""
+    restart_file = settings.PENDING_RESTART_FILE
+    if not restart_file.exists():
+        return
+
+    try:
+        content = restart_file.read_text(encoding="utf-8")
+        data = json.loads(content)
+        chat_id = data.get("chat_id")
+        if chat_id:
+            try:
+                await application.bot.send_message(
+                    chat_id=chat_id,
+                    text="✅ <b>Sistem başarıyla yeniden başlatıldı ve köprü şu an aktif!</b>",
+                    parse_mode=ParseMode.HTML
+                )
+                logger.info(f"Sent post-restart notification to chat_id={chat_id}")
+            except Exception as send_err:
+                logger.error(f"Failed to send post-restart notification to chat_id={chat_id}: {send_err}")
+    except Exception as e:
+        logger.error(f"Error reading pending restart file: {e}")
+    finally:
+        try:
+            if restart_file.exists():
+                restart_file.unlink()
+                logger.info("Removed pending restart notification file.")
+        except Exception as del_err:
+            logger.error(f"Failed to remove pending restart file: {del_err}")
+
+
 async def post_init(application: Application):
-    """Post initialization hook to register bot commands menu with Telegram."""
+    """Post initialization hook to register bot commands menu with Telegram and notify pending restart."""
     try:
         await application.bot.set_my_commands(BOT_COMMANDS)
         logger.info("Telegram Bot commands menu registered successfully.")
     except Exception as e:
         logger.warning(f"Failed to register Telegram bot commands menu: {e}")
+
+    await check_pending_restart_notification(application)
 
 
 # ---------------- Security & Auth Decorator ---------------- #
@@ -278,6 +311,26 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @authorized_only
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Restart the antigravity-hub service in the background."""
+    chat_id = None
+    if update.effective_chat:
+        chat_id = update.effective_chat.id
+    elif update.effective_user:
+        chat_id = update.effective_user.id
+    elif update.callback_query and update.callback_query.message:
+        chat_id = update.callback_query.message.chat_id
+
+    if chat_id:
+        try:
+            settings.PENDING_RESTART_FILE.parent.mkdir(parents=True, exist_ok=True)
+            restart_data = {
+                "chat_id": chat_id,
+                "timestamp": time.time(),
+            }
+            settings.PENDING_RESTART_FILE.write_text(json.dumps(restart_data), encoding="utf-8")
+            logger.info(f"Saved pending restart notification info for chat_id={chat_id}")
+        except Exception as e:
+            logger.error(f"Failed to save pending restart file: {e}")
+
     target_msg = update.message or (update.callback_query.message if update.callback_query else None)
     if target_msg:
         await target_msg.reply_text(

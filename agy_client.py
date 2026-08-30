@@ -57,6 +57,13 @@ class AgyClient:
             return False
         return True
 
+    @staticmethod
+    def _model_embeds_effort(model: Optional[str]) -> bool:
+        """Return whether the selected model already contains its effort level."""
+        if not model:
+            return False
+        return model.rsplit("-", 1)[-1].lower() in {"low", "medium", "high"}
+
     async def run_prompt_stream(
         self,
         user_id: Union[int, str],
@@ -90,7 +97,10 @@ class AgyClient:
         if model:
             cmd.extend(["--model", model])
 
-        if effort:
+        # Current agy rejects combinations such as
+        # gemini-3.1-pro-low + --effort=high. The model catalog encodes the
+        # effort in the model name for these models, so do not send both.
+        if effort and not self._model_embeds_effort(model):
             cmd.extend(["--effort", effort])
 
         if workspace_dir:

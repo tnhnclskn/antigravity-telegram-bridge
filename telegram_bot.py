@@ -50,14 +50,19 @@ logger = logging.getLogger(__name__)
 # ---------------- Bot Commands Menu & Project Config ---------------- #
 
 BOT_COMMANDS = [
+    BotCommand("start", "Botu başlat ve oturum bilgilerini göster"),
+    BotCommand("help", "Komutları ve kullanım bilgilerini göster"),
     BotCommand("newchat", "Yeni oturum başlat"),
+    BotCommand("cancel", "Aktif işlemi iptal et"),
+    BotCommand("status", "Hub ve oturum durumunu göster"),
     BotCommand("update", "Projeleri güncelle (git pull)"),
     BotCommand("usage", "Kullanım ve token istatistikleri"),
     BotCommand("model", "Model seçimi"),
     BotCommand("effort", "Düşünme eforu ayarla"),
-    BotCommand("status", "Hub ve oturum durumu"),
-    BotCommand("help", "Yardım ve komut listesi"),
-    BotCommand("cancel", "Aktif işlemi iptal et"),
+    BotCommand("workspace", "Çalışma dizinini görüntüle veya değiştir"),
+    BotCommand("permissions", "Otonom araç izinlerini aç veya kapat"),
+    BotCommand("history", "Son sohbet geçmişini göster"),
+    BotCommand("whitelist", "İzinli kullanıcıları yönet (admin)"),
 ]
 
 PROJECTS_TO_UPDATE = [

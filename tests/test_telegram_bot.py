@@ -80,6 +80,11 @@ async def test_bot_commands_list_and_post_init():
     assert "status" in command_names
     assert "help" in command_names
     assert "cancel" in command_names
+    assert "start" in command_names
+    assert "workspace" in command_names
+    assert "permissions" in command_names
+    assert "history" in command_names
+    assert "whitelist" in command_names
 
     mock_app = MagicMock()
     mock_app.bot.set_my_commands = AsyncMock()

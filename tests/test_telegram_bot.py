@@ -732,33 +732,37 @@ async def test_handle_incoming_message_no_tools_deletes_thinking_message(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_restart_command_success(monkeypatch):
-    """Test /restart command sends confirmation message, saves pending restart file, and triggers background service restart."""
-    import json
+async def test_restart_command_prompts_confirmation(monkeypatch):
+    """Test /restart command checks active sessions count and asks for confirmation via inline buttons."""
     update = create_mock_update(user_id=1030, username="user30", text="/restart")
     context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
 
     mock_os_system = MagicMock()
     monkeypatch.setattr("telegram_bot.os.system", mock_os_system)
+    monkeypatch.setattr("telegram_bot.agy_client.get_active_count", lambda: 3)
 
     await restart_command(update, context)
 
     update.message.reply_text.assert_awaited_once()
-    sent_text = update.message.reply_text.call_args[0][0]
-    assert "Köprü servisi yeniden başlatılıyor..." in sent_text
+    call_args, call_kwargs = update.message.reply_text.call_args
+    sent_text = call_args[0] if call_args else call_kwargs.get("text", "")
+    assert "3 aktif işlem devam ediyor" in sent_text
+    assert "Emin misiniz?" in sent_text
 
-    # Verify pending restart file was created
-    assert settings.PENDING_RESTART_FILE.exists()
-    data = json.loads(settings.PENDING_RESTART_FILE.read_text(encoding="utf-8"))
-    assert data["chat_id"] == 1030
-    assert "timestamp" in data
+    reply_markup = call_kwargs.get("reply_markup")
+    assert reply_markup is not None
+    callbacks = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+    assert "restart_confirm" in callbacks
+    assert "restart_cancel" in callbacks
 
-    mock_os_system.assert_called_once_with("sleep 1 && systemctl --user restart antigravity-hub.service &")
+    # Ensure restart was NOT triggered yet
+    assert not settings.PENDING_RESTART_FILE.exists()
+    mock_os_system.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_restart_command_callback_query(monkeypatch):
-    """Test restart triggered via callback query saves pending restart file."""
+async def test_restart_confirm_callback(monkeypatch):
+    """Test clicking restart_confirm callback writes pending file and triggers background restart."""
     import json
     update = MagicMock(spec=Update)
     user = MagicMock(spec=User)
@@ -772,16 +776,18 @@ async def test_restart_command_callback_query(monkeypatch):
 
     query = AsyncMock(spec=CallbackQuery)
     query.from_user = user
-    query.data = "cmd_restart"
+    query.data = "restart_confirm"
     query.answer = AsyncMock()
+    query.edit_message_text = AsyncMock()
     query.message = AsyncMock()
     query.message.chat_id = 1031
-    query.message.reply_text = AsyncMock()
 
     update.effective_user = user
     update.effective_chat = chat
     update.message = None
     update.callback_query = query
+
+    await telegram_bot.db.add_whitelisted_user(1031, username="user31", role="admin")
 
     mock_os_system = MagicMock()
     monkeypatch.setattr("telegram_bot.os.system", mock_os_system)
@@ -789,16 +795,110 @@ async def test_restart_command_callback_query(monkeypatch):
     await callback_handler(update, MagicMock())
 
     query.answer.assert_awaited_once()
-    query.message.reply_text.assert_awaited_once()
-    sent_text = query.message.reply_text.call_args[0][0]
+    query.edit_message_text.assert_awaited_once()
+    sent_text = query.edit_message_text.call_args[0][0]
     assert "Köprü servisi yeniden başlatılıyor..." in sent_text
 
     # Verify pending restart file was created
     assert settings.PENDING_RESTART_FILE.exists()
     data = json.loads(settings.PENDING_RESTART_FILE.read_text(encoding="utf-8"))
     assert data["chat_id"] == 1031
+    assert "timestamp" in data
 
     mock_os_system.assert_called_once_with("sleep 1 && systemctl --user restart antigravity-hub.service &")
+
+
+@pytest.mark.asyncio
+async def test_restart_cancel_callback(monkeypatch):
+    """Test clicking restart_cancel callback cancels restart without executing restart or creating marker."""
+    update = MagicMock(spec=Update)
+    user = MagicMock(spec=User)
+    user.id = 1032
+    user.username = "user32"
+    user.first_name = "UserThirtyTwo"
+    user.full_name = "User Thirty Two"
+
+    chat = MagicMock(spec=Chat)
+    chat.id = 1032
+
+    query = AsyncMock(spec=CallbackQuery)
+    query.from_user = user
+    query.data = "restart_cancel"
+    query.answer = AsyncMock()
+    query.edit_message_text = AsyncMock()
+    query.message = AsyncMock()
+    query.message.chat_id = 1032
+
+    update.effective_user = user
+    update.effective_chat = chat
+    update.message = None
+    update.callback_query = query
+
+    await telegram_bot.db.add_whitelisted_user(1032, username="user32", role="admin")
+
+    mock_os_system = MagicMock()
+    monkeypatch.setattr("telegram_bot.os.system", mock_os_system)
+
+    await callback_handler(update, MagicMock())
+
+    query.answer.assert_awaited_once()
+    query.edit_message_text.assert_awaited_once()
+    sent_text = query.edit_message_text.call_args[0][0]
+    assert "Yeniden başlatma iptal edildi" in sent_text
+
+    # Verify pending restart file was NOT created and no restart triggered
+    assert not settings.PENDING_RESTART_FILE.exists()
+    mock_os_system.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_restart_command_callback_query(monkeypatch):
+    """Test cmd_restart callback query triggers confirmation prompt."""
+    update = MagicMock(spec=Update)
+    user = MagicMock(spec=User)
+    user.id = 1033
+    user.username = "user33"
+    user.first_name = "UserThirtyThree"
+    user.full_name = "User Thirty Three"
+
+    chat = MagicMock(spec=Chat)
+    chat.id = 1033
+
+    query = AsyncMock(spec=CallbackQuery)
+    query.from_user = user
+    query.data = "cmd_restart"
+    query.answer = AsyncMock()
+    query.message = AsyncMock()
+    query.message.chat_id = 1033
+    query.message.reply_text = AsyncMock()
+
+    update.effective_user = user
+    update.effective_chat = chat
+    update.message = None
+    update.callback_query = query
+
+    await telegram_bot.db.add_whitelisted_user(1033, username="user33", role="admin")
+
+    mock_os_system = MagicMock()
+    monkeypatch.setattr("telegram_bot.os.system", mock_os_system)
+    monkeypatch.setattr("telegram_bot.agy_client.get_active_count", lambda: 0)
+
+    await callback_handler(update, MagicMock())
+
+    query.answer.assert_awaited_once()
+    query.message.reply_text.assert_awaited_once()
+    call_args, call_kwargs = query.message.reply_text.call_args
+    sent_text = call_args[0] if call_args else call_kwargs.get("text", "")
+    assert "0 aktif işlem devam ediyor" in sent_text
+
+    reply_markup = call_kwargs.get("reply_markup")
+    assert reply_markup is not None
+    callbacks = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+    assert "restart_confirm" in callbacks
+    assert "restart_cancel" in callbacks
+
+    assert not settings.PENDING_RESTART_FILE.exists()
+    mock_os_system.assert_not_called()
 
 
 @pytest.mark.asyncio

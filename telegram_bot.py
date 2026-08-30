@@ -310,34 +310,28 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @authorized_only
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Restart the antigravity-hub service in the background."""
-    chat_id = None
-    if update.effective_chat:
-        chat_id = update.effective_chat.id
-    elif update.effective_user:
-        chat_id = update.effective_user.id
-    elif update.callback_query and update.callback_query.message:
-        chat_id = update.callback_query.message.chat_id
+    """Prompt confirmation before restarting the antigravity-hub service."""
+    active_count = agy_client.get_active_count()
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⚠️ Evet, Zorla Yeniden Başlat", callback_data="restart_confirm"),
+            InlineKeyboardButton("❌ İptal", callback_data="restart_cancel")
+        ]
+    ])
 
-    if chat_id:
-        try:
-            settings.PENDING_RESTART_FILE.parent.mkdir(parents=True, exist_ok=True)
-            restart_data = {
-                "chat_id": chat_id,
-                "timestamp": time.time(),
-            }
-            settings.PENDING_RESTART_FILE.write_text(json.dumps(restart_data), encoding="utf-8")
-            logger.info(f"Saved pending restart notification info for chat_id={chat_id}")
-        except Exception as e:
-            logger.error(f"Failed to save pending restart file: {e}")
+    msg_text = (
+        f"⚠️ <b>Yeniden Başlatma Onayı</b>\n\n"
+        f"Şu anda {active_count} aktif işlem devam ediyor. "
+        f"Botu yeniden başlatmak tüm işlemleri kesecektir. Emin misiniz?"
+    )
 
     target_msg = update.message or (update.callback_query.message if update.callback_query else None)
     if target_msg:
         await target_msg.reply_text(
-            "🔄 <b>Köprü servisi yeniden başlatılıyor...</b>",
-            parse_mode=ParseMode.HTML
+            msg_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard
         )
-    os.system("sleep 1 && systemctl --user restart antigravity-hub.service &")
 
 
 @authorized_only
@@ -805,6 +799,30 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update_command(update, context)
     elif data == "cmd_restart":
         await restart_command(update, context)
+    elif data == "restart_confirm":
+        chat_id = query.message.chat_id if query.message else user_id
+        if chat_id:
+            try:
+                settings.PENDING_RESTART_FILE.parent.mkdir(parents=True, exist_ok=True)
+                restart_data = {
+                    "chat_id": chat_id,
+                    "timestamp": time.time(),
+                }
+                settings.PENDING_RESTART_FILE.write_text(json.dumps(restart_data), encoding="utf-8")
+                logger.info(f"Saved pending restart notification info for chat_id={chat_id}")
+            except Exception as e:
+                logger.error(f"Failed to save pending restart file: {e}")
+
+        await query.edit_message_text(
+            "🔄 <b>Köprü servisi yeniden başlatılıyor...</b>",
+            parse_mode=ParseMode.HTML
+        )
+        os.system("sleep 1 && systemctl --user restart antigravity-hub.service &")
+    elif data == "restart_cancel":
+        await query.edit_message_text(
+            "❌ <b>Yeniden başlatma iptal edildi.</b>",
+            parse_mode=ParseMode.HTML
+        )
     elif data == "cmd_models":
         models = await agy_client.get_available_models()
         session = await db.get_session(user_id)

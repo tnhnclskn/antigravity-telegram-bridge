@@ -81,6 +81,13 @@ class AgyClient:
             return False
         return True
 
+    def get_active_count(self) -> int:
+        """Get the count of currently running agy processes."""
+        dead_keys = [uid for uid, proc in self._active_processes.items() if proc.returncode is not None]
+        for uid in dead_keys:
+            self._active_processes.pop(uid, None)
+        return len(self._active_processes)
+
     async def run_prompt_stream(
         self,
         user_id: Union[int, str],

@@ -162,3 +162,25 @@ async def test_prompt_stream_normalizes_step_update_states(monkeypatch):
     assert events[3]["type"] == "result"
     assert events[3]["response"] == "Found files"
 
+
+def test_agy_get_active_count():
+    from unittest.mock import MagicMock
+    client = AgyClient()
+    assert client.get_active_count() == 0
+
+    mock_proc1 = MagicMock()
+    mock_proc1.returncode = None
+    client._active_processes["user1"] = mock_proc1
+
+    mock_proc2 = MagicMock()
+    mock_proc2.returncode = None
+    client._active_processes["user2"] = mock_proc2
+
+    assert client.get_active_count() == 2
+
+    # If a process finishes (returncode set), get_active_count should clean it up
+    mock_proc1.returncode = 0
+    assert client.get_active_count() == 1
+    assert "user1" not in client._active_processes
+    assert "user2" in client._active_processes
+

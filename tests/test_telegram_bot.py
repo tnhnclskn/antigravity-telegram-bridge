@@ -650,6 +650,150 @@ async def test_telegram_live_updater_error_handling_and_fallback():
 
 
 @pytest.mark.asyncio
+async def test_telegram_live_updater_rapid_trailing_updates_flushed():
+    from telegram_bot import TelegramLiveUpdater
+    mock_msg = AsyncMock()
+    updater = TelegramLiveUpdater(mock_msg, interval=0.1)
+
+    # 1. Immediate edit
+    await updater.update("Chunk 1")
+    assert mock_msg.edit_text.await_count == 1
+    assert mock_msg.edit_text.call_args[0][0] == "Chunk 1"
+
+    # 2. Rapid updates in burst
+    await updater.update("Chunk 1 + 2")
+    await updater.update("Chunk 1 + 2 + 3")
+    await updater.update("Chunk 1 + 2 + 3 + 4")
+    assert mock_msg.edit_text.await_count == 1  # Still throttled
+
+    # 3. Wait for throttle timer
+    await asyncio.sleep(0.15)
+    assert mock_msg.edit_text.await_count == 2
+    assert mock_msg.edit_text.call_args[0][0] == "Chunk 1 + 2 + 3 + 4"
+
+    await updater.close()
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_message_live_text_streaming_with_throttling(monkeypatch):
+    """Test live text delta streaming updates status_msg with intermediate LLM response."""
+    from telegram_bot import handle_incoming_message
+    from formatter import LOADING_INDICATOR
+    update = create_mock_update(user_id=1022, username="user22", text="Tell me a joke")
+    context = MagicMock()
+
+    status_msg = AsyncMock()
+    final_reply_msg = AsyncMock()
+    update.message.reply_text = AsyncMock(side_effect=[status_msg, final_reply_msg])
+
+    async def mock_text_stream(*args, **kwargs):
+        yield {"type": "init", "conversation_id": "conv-text-live"}
+        yield {
+            "type": "step_update",
+            "step_type": "agent_response",
+            "text_delta": "Why did the developer "
+        }
+        yield {
+            "type": "step_update",
+            "step_type": "agent_response",
+            "text_delta": "cross the road? "
+        }
+        yield {
+            "type": "result",
+            "conversation_id": "conv-text-live",
+            "response": "Why did the developer cross the road? To get to the other repo!",
+            "duration_seconds": 0.8,
+            "usage": {"total_tokens": 50}
+        }
+
+    monkeypatch.setattr("telegram_bot.agy_client.run_prompt_stream", mock_text_stream)
+
+    await handle_incoming_message(update, context)
+
+    # Initial status reply was created
+    assert update.message.reply_text.call_count >= 2
+    initial_text = update.message.reply_text.call_args_list[0][0][0]
+    assert LOADING_INDICATOR in initial_text
+
+    # status_msg.edit_text should have been called with the first text delta
+    assert status_msg.edit_text.await_count >= 1
+    first_edit_text = status_msg.edit_text.call_args_list[0][0][0]
+    assert "Why did the developer" in first_edit_text
+    assert LOADING_INDICATOR in first_edit_text
+
+    # When completed (no tools), status_msg is deleted and final clean message is replied
+    status_msg.delete.assert_awaited_once()
+    final_reply = update.message.reply_text.call_args_list[-1][0][0]
+    assert "To get to the other repo!" in final_reply
+    assert LOADING_INDICATOR not in final_reply
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_message_live_streaming_tools_and_text_combined(monkeypatch):
+    """Test live streaming updates containing BOTH tool execution steps AND LLM text deltas."""
+    from telegram_bot import handle_incoming_message
+    from formatter import LOADING_INDICATOR
+    update = create_mock_update(user_id=1023, username="user23", text="Analyze logs")
+    context = MagicMock()
+
+    status_msg = AsyncMock()
+    final_reply_msg = AsyncMock()
+    update.message.reply_text = AsyncMock(side_effect=[status_msg, final_reply_msg])
+
+    async def mock_combined_stream(*args, **kwargs):
+        yield {"type": "init", "conversation_id": "conv-combined-1"}
+        # 1. Tool execution
+        yield {
+            "type": "step_update",
+            "step_type": "tool",
+            "state": "running",
+            "tool_name": "view_file",
+            "tool_info": {"parameters": {"TargetFile": "/var/log/syslog"}}
+        }
+        yield {
+            "type": "step_update",
+            "step_type": "tool",
+            "state": "completed",
+            "tool_name": "view_file",
+            "duration_seconds": 0.25,
+            "tool_info": {"parameters": {"TargetFile": "/var/log/syslog"}}
+        }
+        # 2. Text delta from LLM
+        yield {
+            "type": "step_update",
+            "step_type": "agent_response",
+            "text_delta": "Found 3 warnings in /var/log/syslog."
+        }
+        yield {
+            "type": "result",
+            "conversation_id": "conv-combined-1",
+            "response": "Found 3 warnings in /var/log/syslog. All services are running normally.",
+            "duration_seconds": 1.2,
+            "usage": {"total_tokens": 150}
+        }
+
+    monkeypatch.setattr("telegram_bot.agy_client.run_prompt_stream", mock_combined_stream)
+
+    await handle_incoming_message(update, context)
+
+    # Initial status reply was created
+    assert update.message.reply_text.call_count >= 2
+
+    # Status message should have been edited during live progress
+    assert status_msg.edit_text.await_count >= 1
+
+    # At the end, status_msg has finalized stages summary (no loading indicator)
+    final_stage_edit = status_msg.edit_text.call_args_list[-1][0][0]
+    assert "İşlem Aşamaları" in final_stage_edit
+    assert LOADING_INDICATOR not in final_stage_edit
+
+    # Final response is sent via reply_text without loading indicator
+    final_reply = update.message.reply_text.call_args_list[-1][0][0]
+    assert "All services are running normally." in final_reply
+    assert LOADING_INDICATOR not in final_reply
+
+
+@pytest.mark.asyncio
 async def test_handle_incoming_message_live_streaming_tools_and_final_response(monkeypatch):
     """Test full live streaming updates when tools are executed."""
     from telegram_bot import handle_incoming_message

@@ -911,9 +911,9 @@ async def send_typing_periodically(chat_id: int, bot, stop_event: asyncio.Event)
 class TelegramLiveUpdater:
     """
     Manages throttled live message editing for Telegram to provide instant feedback
-    while respecting Telegram API rate limits (typically ~1 edit per second per chat).
+    while respecting Telegram API rate limits (typically ~1 edit per 1.5 seconds per chat).
     """
-    def __init__(self, message_obj: Any, interval: float = 1.2):
+    def __init__(self, message_obj: Any, interval: float = 1.5):
         self.message_obj = message_obj
         self.interval = max(0.01, interval)
         self.last_edit_time = 0.0
@@ -947,8 +947,14 @@ class TelegramLiveUpdater:
     async def _delayed_edit(self, delay: float):
         try:
             await asyncio.sleep(delay)
-            if not self._closed and self.target_text and self.target_text != self.last_sent_text:
-                await self._apply_edit(self.target_text)
+            while not self._closed and self.target_text and self.target_text != self.last_sent_text:
+                text_to_send = self.target_text
+                await self._apply_edit(text_to_send)
+                if not self._closed and self.target_text and self.target_text != self.last_sent_text:
+                    now = time.time()
+                    time_since = now - self.last_edit_time
+                    if time_since < self.interval:
+                        await asyncio.sleep(max(0.05, self.interval - time_since))
         except asyncio.CancelledError:
             pass
 
@@ -981,6 +987,7 @@ class TelegramLiveUpdater:
         if self.pending_task and not self.pending_task.done():
             self.pending_task.cancel()
             self.pending_task = None
+
 
 
 @authorized_only
@@ -1140,6 +1147,13 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
                     state = event.get("state", "running")
                     tool_info = event.get("tool_info", {})
                     duration = event.get("duration_seconds")
+                    text_delta = event.get("text_delta", "")
+                    accum_from_event = event.get("accumulated_text")
+
+                    if accum_from_event:
+                        accumulated_response = accum_from_event
+                    elif text_delta:
+                        accumulated_response += text_delta
 
                     if tool_name:
                         # Match the most recent running tool with the same name and arguments
@@ -1170,12 +1184,15 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
                                 "duration_seconds": duration
                             })
 
-                        current_status = format_cumulative_status_telegram(executed_tools)
-                        await live_updater.update(current_status)
+                    current_status = format_cumulative_status_telegram(
+                        tools=executed_tools,
+                        current_text=accumulated_response
+                    )
+                    await live_updater.update(current_status)
 
                 elif event_type == "result":
                     final_result_data = event
-                    accumulated_response = event.get("response", "")
+                    accumulated_response = event.get("response", accumulated_response)
                     res_conv_id = event.get("conversation_id")
                     if res_conv_id:
                         conversation_id = res_conv_id

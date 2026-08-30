@@ -402,14 +402,16 @@ LOADING_INDICATOR = "⏳ <i>İşlem devam ediyor...</i>"
 def format_cumulative_status_telegram(
     tools: List[dict],
     active_subagents: Optional[List[dict]] = None,
-    elapsed_seconds: Optional[float] = None
+    elapsed_seconds: Optional[float] = None,
+    current_text: Optional[str] = None
 ) -> str:
     """
-    Format all executed and currently running tool stages into a cumulative live progress message.
+    Format all executed and currently running tool stages along with live streaming LLM text into a cumulative progress message.
     Displays:
-    - 🤖 Aktif Ajanlar (Active Subagents)
-    - 🔄 Aktif İşlem (Currently running tool)
-    - 📋 Tamamlanan Adımlar (Completed steps)
+    - 🤖 Aktif Ajanlar (Active Subagents, if any)
+    - 🔄 Aktif İşlem (Currently running tool, if any)
+    - 📋 Tamamlanan Adımlar (Completed steps, if any)
+    - Live streamed LLM response accumulated so far (if any)
     - ⏳ İşlem devam ediyor... (Loading indicator at the bottom)
     """
     subs = []
@@ -427,9 +429,6 @@ def format_cumulative_status_telegram(
             running_subagent_tools.append(t)
         else:
             normal_tools.append(t)
-
-    if not tools and not active_subagents and not subs:
-        return f"🧠 <i>Düşünülüyor ve hazırlanıyor...</i>\n\n{LOADING_INDICATOR}"
 
     sections = []
 
@@ -481,7 +480,24 @@ def format_cumulative_status_telegram(
         else:
             sections.append(f"{header}\n" + "\n".join(comp_lines))
 
-    full_text = "\n\n".join(sections) if sections else "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>"
+    has_tools_or_subs = bool(sections)
+    tools_part = "\n\n".join(sections) if sections else ""
+
+    text_part = ""
+    if current_text and current_text.strip():
+        text_part = markdown_to_telegram_html(current_text.strip())
+        if len(text_part) > 2500:
+            text_part = text_part[:2450] + "\n..."
+
+    if not has_tools_or_subs and not text_part:
+        return f"🧠 <i>Düşünülüyor ve hazırlanıyor...</i>\n\n{LOADING_INDICATOR}"
+
+    if has_tools_or_subs and text_part:
+        full_text = f"{tools_part}\n\n{text_part}"
+    elif has_tools_or_subs:
+        full_text = tools_part
+    else:
+        full_text = text_part
 
     # Enforce safe cutoff (< 3500 chars)
     if len(full_text) > 3500:

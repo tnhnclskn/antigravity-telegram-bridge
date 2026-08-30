@@ -341,3 +341,52 @@ def test_loading_indicator_absence_in_final_outputs():
     assert LOADING_INDICATOR not in footer
 
 
+def test_format_cumulative_status_telegram_with_accumulated_text_only():
+    """Test cumulative status with only streaming LLM text and no tools."""
+    res = format_cumulative_status_telegram([], current_text="Hello, I am processing your request.")
+    assert "Hello, I am processing your request." in res
+    assert "Düşünülüyor" not in res
+    assert LOADING_INDICATOR in res
+    assert res.endswith(LOADING_INDICATOR)
+
+
+def test_format_cumulative_status_telegram_with_tools_and_accumulated_text():
+    """Test cumulative status with tool progress on top and accumulated LLM text underneath."""
+    tools = [
+        {"tool_name": "view_file", "tool_info": {"TargetFile": "main.py"}, "state": "completed", "duration_seconds": 0.2},
+        {"tool_name": "run_command", "tool_info": {"CommandLine": "pytest"}, "state": "running"}
+    ]
+    current_text = "Here is what I found in main.py so far:\n- Issue in line 42."
+    res = format_cumulative_status_telegram(tools, current_text=current_text)
+
+    # Tool sections should appear before the accumulated text
+    tools_index = res.find("Aktif İşlem")
+    text_index = res.find("Here is what I found")
+    loading_index = res.find(LOADING_INDICATOR)
+
+    assert tools_index != -1
+    assert text_index != -1
+    assert loading_index != -1
+    assert tools_index < text_index < loading_index
+    assert res.endswith(LOADING_INDICATOR)
+
+
+def test_format_cumulative_status_telegram_accumulated_text_markdown_formatting():
+    """Test that Markdown formatting in streaming text is safely converted to Telegram HTML."""
+    md_text = "Analysis result: **bold text** and `inline_code`"
+    res = format_cumulative_status_telegram([], current_text=md_text)
+    assert "<b>bold text</b>" in res
+    assert "<code>inline_code</code>" in res
+    assert LOADING_INDICATOR in res
+
+
+def test_format_cumulative_status_telegram_long_accumulated_text_truncation():
+    """Test that very long accumulated text is truncated to keep within safe Telegram message bounds."""
+    long_text = "A" * 5000
+    res = format_cumulative_status_telegram([], current_text=long_text)
+    assert len(res) <= 3600
+    assert "..." in res
+    assert LOADING_INDICATOR in res
+    assert res.endswith(LOADING_INDICATOR)
+
+

@@ -59,6 +59,7 @@ BOT_COMMANDS = [
     BotCommand("cancel", "Aktif işlemi iptal et"),
     BotCommand("status", "Hub ve oturum durumunu göster"),
     BotCommand("update", "Projeleri güncelle (git pull)"),
+    BotCommand("restart", "Köprü servisini yeniden başlatır"),
     BotCommand("usage", "Kullanım ve token istatistikleri"),
     BotCommand("model", "Model seçimi"),
     BotCommand("effort", "Düşünme eforu ayarla"),
@@ -193,6 +194,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <code>/status</code> - Aktif oturum, model, sunucu ve sistem kaynak durumu\n"
         "• <code>/usage</code> - Token, mesaj ve oturum kullanım istatistikleri (Antigravity & Codex)\n"
         "• <code>/update</code> - Yerel projeleri günceller (git pull --rebase)\n"
+        "• <code>/restart</code> - Köprü servisini yeniden başlatır\n"
         "• <code>/stop</code>, <code>/cancel</code> - Çalışan Antigravity sürecini durdurur\n"
         "• <code>/model [isim]</code> - Kullanılan yapay zeka modelini görüntüler veya değiştirir\n"
         "• <code>/effort [low|medium|high]</code> - Düşünme / Akıl yürütme seviyesini ayarlar\n"
@@ -271,6 +273,18 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply_text = "🔄 <b>Git Güncelleme Raporu:</b>\n\n" + "\n\n".join(results)
     await status_msg.edit_text(reply_text, parse_mode=ParseMode.HTML)
+
+
+@authorized_only
+async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Restart the antigravity-hub service in the background."""
+    target_msg = update.message or (update.callback_query.message if update.callback_query else None)
+    if target_msg:
+        await target_msg.reply_text(
+            "🔄 <b>Köprü servisi yeniden başlatılıyor...</b>",
+            parse_mode=ParseMode.HTML
+        )
+    os.system("sleep 1 && systemctl --user restart antigravity-hub.service &")
 
 
 @authorized_only
@@ -736,6 +750,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await usage_command(update, context)
     elif data == "cmd_update":
         await update_command(update, context)
+    elif data == "cmd_restart":
+        await restart_command(update, context)
     elif data == "cmd_models":
         models = await agy_client.get_available_models()
         session = await db.get_session(user_id)
@@ -1139,6 +1155,7 @@ def build_application() -> Application:
     application.add_handler(CommandHandler(["cancel", "stop"], cancel_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("update", update_command))
+    application.add_handler(CommandHandler("restart", restart_command))
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("model", model_command))
     application.add_handler(CommandHandler("effort", effort_command))

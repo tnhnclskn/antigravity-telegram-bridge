@@ -19,6 +19,7 @@ from telegram_bot import (
     get_available_projects,
     new_session_command,
     update_command,
+    restart_command,
     usage_command,
     status_command,
     model_command,
@@ -81,6 +82,7 @@ async def test_bot_commands_list_and_post_init():
     assert "projects" in command_names
     assert "newchat" in command_names
     assert "update" in command_names
+    assert "restart" in command_names
     assert "usage" in command_names
     assert "model" in command_names
     assert "effort" in command_names
@@ -119,6 +121,7 @@ async def test_start_and_help_commands():
     assert "/projects" in help_call_args
     assert "/newchat" in help_call_args
     assert "/update" in help_call_args
+    assert "/restart" in help_call_args
     assert "/usage" in help_call_args
 
 
@@ -415,6 +418,7 @@ async def test_build_application():
             assert "project" in registered_cmds
             assert "newchat" in registered_cmds
             assert "update" in registered_cmds
+            assert "restart" in registered_cmds
             assert "usage" in registered_cmds
             assert "model" in registered_cmds
             assert "effort" in registered_cmds
@@ -668,5 +672,77 @@ async def test_handle_incoming_message_no_tools_deletes_thinking_message(monkeyp
     # Final response delivered
     final_reply_args = update.message.reply_text.call_args_list[-1][0][0]
     assert "Hello from LLM!" in final_reply_args
+
+
+@pytest.mark.asyncio
+async def test_restart_command_success(monkeypatch):
+    """Test /restart command sends confirmation message and triggers background service restart."""
+    update = create_mock_update(user_id=1030, username="user30", text="/restart")
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+
+    mock_os_system = MagicMock()
+    monkeypatch.setattr("telegram_bot.os.system", mock_os_system)
+
+    await restart_command(update, context)
+
+    update.message.reply_text.assert_awaited_once()
+    sent_text = update.message.reply_text.call_args[0][0]
+    assert "Köprü servisi yeniden başlatılıyor..." in sent_text
+
+    mock_os_system.assert_called_once_with("sleep 1 && systemctl --user restart antigravity-hub.service &")
+
+
+@pytest.mark.asyncio
+async def test_restart_command_callback_query(monkeypatch):
+    """Test restart triggered via callback query."""
+    update = MagicMock(spec=Update)
+    user = MagicMock(spec=User)
+    user.id = 1031
+    user.username = "user31"
+    user.first_name = "UserThirtyOne"
+    user.full_name = "User Thirty One"
+
+    query = AsyncMock(spec=CallbackQuery)
+    query.from_user = user
+    query.data = "cmd_restart"
+    query.answer = AsyncMock()
+    query.message = AsyncMock()
+    query.message.reply_text = AsyncMock()
+
+    update.effective_user = user
+    update.effective_chat = user
+    update.message = None
+    update.callback_query = query
+
+    mock_os_system = MagicMock()
+    monkeypatch.setattr("telegram_bot.os.system", mock_os_system)
+
+    await callback_handler(update, MagicMock())
+
+    query.answer.assert_awaited_once()
+    query.message.reply_text.assert_awaited_once()
+    sent_text = query.message.reply_text.call_args[0][0]
+    assert "Köprü servisi yeniden başlatılıyor..." in sent_text
+    mock_os_system.assert_called_once_with("sleep 1 && systemctl --user restart antigravity-hub.service &")
+
+
+@pytest.mark.asyncio
+async def test_restart_command_unauthorized(monkeypatch):
+    """Test /restart command is rejected for unauthorized users."""
+    await telegram_bot.db.add_whitelisted_user(9999, "admin")
+
+    update = create_mock_update(user_id=8888, username="stranger", text="/restart")
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+
+    mock_os_system = MagicMock()
+    monkeypatch.setattr("telegram_bot.os.system", mock_os_system)
+
+    await restart_command(update, context)
+
+    update.message.reply_text.assert_awaited_once()
+    sent_text = update.message.reply_text.call_args[0][0]
+    assert "Yetkisiz Erişim" in sent_text
+    mock_os_system.assert_not_called()
+
 
 

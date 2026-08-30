@@ -68,6 +68,7 @@ class Settings:
         shutil.which("agy") or "/root/.local/bin/agy"
     ).strip()
     DEFAULT_WORKSPACE: str = os.getenv("DEFAULT_WORKSPACE", "/root").strip()
+    PROJECTS_DIR: Path = Path(os.getenv("PROJECTS_DIR", "/root/Projects"))
     DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "gemini-3.7-flash").strip()
     DEFAULT_EFFORT: str = os.getenv("DEFAULT_EFFORT", "high").strip()
     AUTO_APPROVE_PERMISSIONS: bool = _get_bool("AUTO_APPROVE_PERMISSIONS", True)

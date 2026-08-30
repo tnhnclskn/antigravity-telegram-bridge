@@ -15,6 +15,8 @@ from telegram_bot import (
     post_init,
     start_command,
     help_command,
+    projects_command,
+    get_available_projects,
     new_session_command,
     update_command,
     usage_command,
@@ -72,15 +74,16 @@ def create_mock_update(user_id: int = 12345, username: str = "testuser", text: s
 async def test_bot_commands_list_and_post_init():
     """Verify that BOT_COMMANDS contains required commands and post_init registers them."""
     command_names = [cmd.command for cmd in BOT_COMMANDS]
+    assert "start" in command_names
+    assert "help" in command_names
+    assert "projects" in command_names
     assert "newchat" in command_names
     assert "update" in command_names
     assert "usage" in command_names
     assert "model" in command_names
     assert "effort" in command_names
     assert "status" in command_names
-    assert "help" in command_names
     assert "cancel" in command_names
-    assert "start" in command_names
     assert "workspace" in command_names
     assert "permissions" in command_names
     assert "history" in command_names
@@ -111,6 +114,7 @@ async def test_start_and_help_commands():
     await help_command(update, context)
     update.message.reply_text.assert_awaited_once()
     help_call_args = update.message.reply_text.call_args[0][0]
+    assert "/projects" in help_call_args
     assert "/newchat" in help_call_args
     assert "/update" in help_call_args
     assert "/usage" in help_call_args
@@ -255,14 +259,14 @@ async def test_callback_handler_actions(monkeypatch):
     query.edit_message_text.assert_awaited_once()
     assert "Yeni oturum başlatıldı" in query.edit_message_text.call_args[0][0]
 
-    # 2. set_model
+    # 2. set_model (normalized without effort suffix)
     query.edit_message_text.reset_mock()
     query.data = "set_model:gemini-3.7-flash-high"
     await callback_handler(update, context)
     query.edit_message_text.assert_awaited_once()
     assert "Model güncellendi" in query.edit_message_text.call_args[0][0]
     session = await telegram_bot.db.get_session(1006)
-    assert session["model"] == "gemini-3.7-flash-high"
+    assert session["model"] == "gemini-3.7-flash"
 
     # 3. set_effort
     query.edit_message_text.reset_mock()
@@ -272,6 +276,122 @@ async def test_callback_handler_actions(monkeypatch):
     assert "Düşünme seviyesi güncellendi" in query.edit_message_text.call_args[0][0]
     session = await telegram_bot.db.get_session(1006)
     assert session["effort"] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_get_available_projects(tmp_path: Path, monkeypatch):
+    """Test get_available_projects scans directory and falls back if empty."""
+    # Custom projects directory with 2 mock folders
+    p1 = tmp_path / "project-alpha"
+    p1.mkdir()
+    p2 = tmp_path / "project_beta"
+    p2.mkdir()
+    hidden = tmp_path / ".hidden_project"
+    hidden.mkdir()
+
+    monkeypatch.setattr(settings, "PROJECTS_DIR", tmp_path)
+    projects = get_available_projects()
+    slugs = [p["slug"] for p in projects]
+    assert "project-alpha" in slugs
+    assert "project_beta" in slugs
+    assert ".hidden_project" not in slugs
+
+    # Test fallback when directory does not exist
+    non_existent = tmp_path / "non_existent_dir"
+    monkeypatch.setattr(settings, "PROJECTS_DIR", non_existent)
+    fallback_projects = get_available_projects()
+    assert len(fallback_projects) > 0
+
+
+@pytest.mark.asyncio
+async def test_projects_command_interactive(monkeypatch, tmp_path: Path):
+    """Test /projects command renders interactive inline keyboard."""
+    p1 = tmp_path / "demo-project"
+    p1.mkdir()
+    monkeypatch.setattr(settings, "PROJECTS_DIR", tmp_path)
+
+    update = create_mock_update(user_id=1010, username="user10", text="/projects")
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+    context.args = []
+
+    await projects_command(update, context)
+    update.message.reply_text.assert_awaited_once()
+    call_args = update.message.reply_text.call_args
+    text = call_args[0][0]
+    reply_markup = call_args[1]["reply_markup"]
+
+    assert "Kullanılabilir Projeler" in text
+    assert len(reply_markup.inline_keyboard) >= 1
+    assert any("Demo Project" in btn.text for row in reply_markup.inline_keyboard for btn in row)
+
+
+@pytest.mark.asyncio
+async def test_projects_command_with_arg(monkeypatch, tmp_path: Path):
+    """Test /projects <slug> directly switches workspace and resets conversation."""
+    target_p = tmp_path / "my-target-proj"
+    target_p.mkdir()
+    monkeypatch.setattr(settings, "PROJECTS_DIR", tmp_path)
+
+    # Set prior conversation
+    await telegram_bot.db.update_session(1011, conversation_id="conv-prior-111", workspace="/root")
+    update = create_mock_update(user_id=1011, username="user11", text="/projects my-target-proj")
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+    context.args = ["my-target-proj"]
+
+    await projects_command(update, context)
+    update.message.reply_text.assert_awaited_once()
+    msg = update.message.reply_text.call_args[0][0]
+    assert "Aktif Proje Değiştirildi" in msg
+
+    session = await telegram_bot.db.get_session(1011)
+    assert session["workspace"] == str(target_p.resolve())
+    assert session["conversation_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_callback_handler_projects_and_select(monkeypatch, tmp_path: Path):
+    """Test callback interactions for cmd_projects and select_project:slug."""
+    target_p = tmp_path / "quick-tool"
+    target_p.mkdir()
+    monkeypatch.setattr(settings, "PROJECTS_DIR", tmp_path)
+
+    update = MagicMock(spec=Update)
+    user = MagicMock(spec=User)
+    user.id = 1012
+    user.username = "user12"
+    user.first_name = "UserTwelve"
+    user.full_name = "User Twelve"
+
+    query = AsyncMock(spec=CallbackQuery)
+    query.from_user = user
+    query.answer = AsyncMock()
+    query.edit_message_text = AsyncMock()
+    query.message = AsyncMock()
+    query.message.reply_text = AsyncMock()
+
+    update.effective_user = user
+    update.callback_query = query
+    update.message = None
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+
+    await telegram_bot.db.add_whitelisted_user(1012, username="user12", role="admin")
+    await telegram_bot.db.update_session(1012, conversation_id="conv-prior-222", workspace="/old/path")
+
+    # 1. Trigger cmd_projects
+    query.data = "cmd_projects"
+    await callback_handler(update, context)
+    query.message.reply_text.assert_awaited_once()
+    assert "Kullanılabilir Projeler" in query.message.reply_text.call_args[0][0]
+
+    # 2. Trigger select_project:quick-tool
+    query.data = "select_project:quick-tool"
+    await callback_handler(update, context)
+    query.edit_message_text.assert_awaited_once()
+    assert "Aktif Proje Değiştirildi" in query.edit_message_text.call_args[0][0]
+
+    session = await telegram_bot.db.get_session(1012)
+    assert session["workspace"] == str(target_p.resolve())
+    assert session["conversation_id"] is None
 
 
 @pytest.mark.asyncio
@@ -289,6 +409,8 @@ async def test_build_application():
                 for c in h.commands:
                     registered_cmds.add(c)
 
+            assert "projects" in registered_cmds
+            assert "project" in registered_cmds
             assert "newchat" in registered_cmds
             assert "update" in registered_cmds
             assert "usage" in registered_cmds
@@ -328,3 +450,4 @@ async def test_cancel_command_success(monkeypatch):
     update.message.reply_text.assert_awaited_once()
     reply_text = update.message.reply_text.call_args[0][0]
     assert "Çalışan görev iptal edildi" in reply_text
+

@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
 BOT_COMMANDS = [
     BotCommand("start", "Botu başlat ve oturum bilgilerini göster"),
     BotCommand("help", "Komutları ve kullanım bilgilerini göster"),
+    BotCommand("projects", "Projeleri listele ve aktif projeyi seç"),
     BotCommand("newchat", "Yeni oturum başlat"),
     BotCommand("cancel", "Aktif işlemi iptal et"),
     BotCommand("status", "Hub ve oturum durumunu göster"),
@@ -152,15 +153,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [
             InlineKeyboardButton("🆕 Yeni Oturum", callback_data="cmd_new"),
-            InlineKeyboardButton("⚙️ Durum", callback_data="cmd_status"),
+            InlineKeyboardButton("📁 Projeler", callback_data="cmd_projects"),
         ],
         [
+            InlineKeyboardButton("⚙️ Durum", callback_data="cmd_status"),
             InlineKeyboardButton("📊 Kullanım", callback_data="cmd_usage"),
-            InlineKeyboardButton("🔄 Güncelle", callback_data="cmd_update"),
         ],
         [
             InlineKeyboardButton("🧠 Model Seç", callback_data="cmd_models"),
             InlineKeyboardButton("🎯 Düşünme Seviyesi", callback_data="cmd_efforts"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Güncelle", callback_data="cmd_update"),
         ],
         [
             InlineKeyboardButton("📖 Yardım & Komutlar", callback_data="cmd_help")
@@ -181,6 +185,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📚 <b>Antigravity Telegram Köprüsü Komut Kılavuzu</b>\n\n"
         "<b>Temel Komutlar:</b>\n"
         "• <code>/start</code> - Başlangıç ekranı ve oturum özeti\n"
+        "• <code>/projects</code> - Projeleri listeler, seçilen projeye geçer ve yeni oturum açar\n"
         "• <code>/newchat</code>, <code>/new</code>, <code>/reset</code>, <code>/clear</code> - Mevcut sohbet bağlamını sıfırlar ve yeni oturum açar\n"
         "• <code>/status</code> - Aktif oturum, model, sunucu ve sistem kaynak durumu\n"
         "• <code>/usage</code> - Token, mesaj ve oturum kullanım istatistikleri (Antigravity & Codex)\n"
@@ -423,6 +428,89 @@ async def effort_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎯 <b>Düşünme Seviyesi (Reasoning Effort) Seçin:</b>", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
+def get_available_projects() -> List[Dict[str, str]]:
+    """Scan PROJECTS_DIR for subdirectories and return a list of available projects."""
+    projects_dir = Path(settings.PROJECTS_DIR)
+    projects: List[Dict[str, str]] = []
+
+    if projects_dir.exists() and projects_dir.is_dir():
+        for item in sorted(projects_dir.iterdir()):
+            if item.is_dir() and not item.name.startswith("."):
+                display_name = item.name.replace("-", " ").replace("_", " ").title()
+                projects.append({
+                    "name": display_name,
+                    "slug": item.name,
+                    "path": str(item.resolve())
+                })
+
+    if not projects:
+        for name, path in PROJECTS_TO_UPDATE:
+            projects.append({
+                "name": name,
+                "slug": os.path.basename(path),
+                "path": str(Path(path).resolve())
+            })
+
+    return projects
+
+
+@authorized_only
+async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List available projects and switch active workspace with session reset."""
+    user = update.effective_user
+    args = context.args if context else None
+    projects = get_available_projects()
+    session = await db.get_session(user.id)
+    current_workspace = str(Path(session.get("workspace", settings.DEFAULT_WORKSPACE)).resolve())
+
+    target_msg = update.message or (update.callback_query.message if update.callback_query else None)
+
+    # If argument provided, switch workspace directly
+    has_args = isinstance(args, (list, tuple)) and len(args) > 0 and isinstance(args[0], str)
+    if has_args:
+        query_str = args[0].strip().lower()
+        matched = next(
+            (p for p in projects if p["slug"].lower() == query_str or p["name"].lower() == query_str or query_str in p["path"].lower()),
+            None
+        )
+        if matched:
+            await db.update_session(user.id, workspace=matched["path"], conversation_id=None)
+            msg = (
+                f"📁 <b>Aktif Proje Değiştirildi!</b>\n\n"
+                f"• <b>Proje:</b> <code>{escape_html(matched['name'])}</code>\n"
+                f"• <b>Dizin:</b> <code>{escape_html(matched['path'])}</code>\n"
+                f"• <b>Oturum:</b> Sıfırlandı (Yeni oturum hazır)\n\n"
+                f"💡 <i>Artık bu proje üzerinde çalışmaya başlayabilirsiniz.</i>"
+            )
+            if target_msg:
+                await target_msg.reply_text(msg, parse_mode=ParseMode.HTML)
+            return
+        else:
+            err_msg = f"❌ <code>{escape_html(args[0])}</code> adında bir proje bulunamadı."
+            if target_msg:
+                await target_msg.reply_text(err_msg, parse_mode=ParseMode.HTML)
+            return
+
+    # Interactive inline keyboard for projects
+    keyboard = []
+    for p in projects:
+        is_active = (current_workspace == str(Path(p["path"]).resolve()))
+        prefix = "✅ " if is_active else "📁 "
+        keyboard.append([
+            InlineKeyboardButton(f"{prefix}{p['name']}", callback_data=f"select_project:{p['slug']}")
+        ])
+
+    text = (
+        "📁 <b>Kullanılabilir Projeler</b>\n\n"
+        f"Mevcut Çalışma Alanı: <code>{escape_html(current_workspace)}</code>\n\n"
+        "Çalışmak istediğiniz projeyi seçin (Seçtiğinizde yeni oturum başlatılır):"
+    )
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    if target_msg:
+        await target_msg.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+
+
 @authorized_only
 async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """View or set workspace directory."""
@@ -553,6 +641,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "cmd_new":
         await db.reset_session(user_id)
         await query.edit_message_text("🔄 <b>Yeni oturum başlatıldı!</b>", parse_mode=ParseMode.HTML)
+    elif data == "cmd_projects":
+        await projects_command(update, context)
     elif data == "cmd_status":
         await status_command(update, context)
     elif data == "cmd_help":
@@ -584,6 +674,22 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         effort_name = data.split(":", 1)[1]
         await db.update_session(user_id, effort=effort_name)
         await query.edit_message_text(f"✅ <b>Düşünme seviyesi güncellendi:</b> <code>{escape_html(effort_name)}</code>", parse_mode=ParseMode.HTML)
+    elif data.startswith("select_project:"):
+        project_slug = data.split(":", 1)[1]
+        projects = get_available_projects()
+        selected = next((p for p in projects if p["slug"] == project_slug or p["path"] == project_slug), None)
+        if selected:
+            await db.update_session(user_id, workspace=selected["path"], conversation_id=None)
+            reply_text = (
+                f"📁 <b>Aktif Proje Değiştirildi!</b>\n\n"
+                f"• <b>Proje:</b> <code>{escape_html(selected['name'])}</code>\n"
+                f"• <b>Dizin:</b> <code>{escape_html(selected['path'])}</code>\n"
+                f"• <b>Oturum:</b> Sıfırlandı (Yeni oturum hazır)\n\n"
+                f"💡 <i>Artık bu proje üzerinde çalışmaya başlayabilirsiniz.</i>"
+            )
+            await query.edit_message_text(reply_text, parse_mode=ParseMode.HTML)
+        else:
+            await query.edit_message_text("❌ Seçilen proje bulunamadı.", parse_mode=ParseMode.HTML)
 
 
 # ---------------- Message & Media Handler ---------------- #
@@ -835,6 +941,7 @@ def build_application() -> Application:
     # Command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler(["projects", "project"], projects_command))
     application.add_handler(CommandHandler(["newchat", "new", "reset", "clear"], new_session_command))
     application.add_handler(CommandHandler(["cancel", "stop"], cancel_command))
     application.add_handler(CommandHandler("status", status_command))

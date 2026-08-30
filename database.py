@@ -177,7 +177,8 @@ class Database:
                 return dict(row) if row else default_session
 
     async def update_session(self, user_id: int = 0, **kwargs):
-        """Update session fields."""
+        """Update session fields, ensuring session exists first."""
+        await self.get_session(user_id)
         if not kwargs:
             return
         kwargs["updated_at"] = _utc_now_str()
@@ -190,6 +191,7 @@ class Database:
 
     async def reset_session(self, user_id: int = 0) -> str:
         """Reset conversation ID to start a fresh Antigravity session."""
+        await self.get_session(user_id)
         now = _utc_now_str()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
@@ -256,5 +258,185 @@ class Database:
             await db.execute("DELETE FROM message_history WHERE user_id = ?", (user_id,))
             await db.commit()
 
+    # ---------------- Usage Statistics ---------------- #
+
+    async def get_usage_stats(self, user_id: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Calculate comprehensive usage statistics from message history and metadata.
+        Returns total sessions, message counts (all, user, assistant, last 24h),
+        estimated/exact token usage, and latency metrics.
+        """
+        import json
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+
+            # 1. Total distinct conversations
+            conv_query = "SELECT COUNT(DISTINCT conversation_id) FROM message_history WHERE conversation_id IS NOT NULL AND conversation_id != ''"
+            conv_params = ()
+            if user_id is not None:
+                conv_query += " AND user_id = ?"
+                conv_params = (user_id,)
+
+            async with db.execute(conv_query, conv_params) as cur:
+                row = await cur.fetchone()
+                total_sessions = row[0] if row else 0
+
+            # 2. Fetch all messages
+            msg_query = "SELECT id, user_id, conversation_id, role, content, metadata, timestamp FROM message_history"
+            msg_params = ()
+            if user_id is not None:
+                msg_query += " WHERE user_id = ?"
+                msg_params = (user_id,)
+
+            async with db.execute(msg_query, msg_params) as cur:
+                rows = await cur.fetchall()
+
+            total_messages = len(rows)
+            user_messages = 0
+            assistant_messages = 0
+            messages_24h = 0
+
+            total_tokens = 0
+            tokens_24h = 0
+            total_duration = 0.0
+            duration_count = 0
+
+            now = datetime.now(timezone.utc)
+            one_day_ago = now.timestamp() - 86400
+
+            for r in rows:
+                role = r["role"]
+                content = r["content"] or ""
+                metadata_str = r["metadata"]
+                ts_str = r["timestamp"]
+
+                if role == "user":
+                    user_messages += 1
+                elif role == "assistant":
+                    assistant_messages += 1
+
+                # Parse timestamp for 24h calculation
+                is_last_24h = False
+                if ts_str:
+                    try:
+                        dt = datetime.fromisoformat(ts_str)
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        if dt.timestamp() >= one_day_ago:
+                            is_last_24h = True
+                            messages_24h += 1
+                    except Exception:
+                        pass
+
+                # Parse token & latency from metadata or fallback to estimation
+                item_tokens = 0
+                has_metadata_tokens = False
+
+                if metadata_str:
+                    try:
+                        meta = json.loads(metadata_str)
+                        usage = meta.get("usage", {})
+                        if isinstance(usage, dict) and "total_tokens" in usage and usage["total_tokens"]:
+                            item_tokens = int(usage["total_tokens"])
+                            has_metadata_tokens = True
+                        if "duration_seconds" in meta and meta["duration_seconds"] is not None:
+                            item_duration = float(meta["duration_seconds"])
+                            total_duration += item_duration
+                            duration_count += 1
+                    except Exception:
+                        pass
+
+                if not has_metadata_tokens:
+                    # Estimate tokens: approx 1 token per 4 chars
+                    item_tokens = max(1, len(content) // 4) if content else 0
+
+                total_tokens += item_tokens
+                if is_last_24h:
+                    tokens_24h += item_tokens
+
+            avg_latency = round(total_duration / duration_count, 2) if duration_count > 0 else 0.0
+
+            return {
+                "total_sessions": total_sessions,
+                "total_messages": total_messages,
+                "user_messages": user_messages,
+                "assistant_messages": assistant_messages,
+                "messages_24h": messages_24h,
+                "total_tokens_est": total_tokens,
+                "tokens_24h_est": tokens_24h,
+                "avg_latency": avg_latency,
+                "total_duration": round(total_duration, 2),
+                "recorded_latencies_count": duration_count
+            }
+
+
+def get_codex_stats(codex_dir: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
+    """
+    Analyze /root/.codex directory structure, database sizes, log entries, and session metrics.
+    """
+    import os
+    import sqlite3
+    target_path = Path(codex_dir) if codex_dir else Path("/root/.codex")
+    if not target_path.exists() or not target_path.is_dir():
+        return {
+            "exists": False,
+            "path": str(target_path),
+            "total_size_mb": 0.0,
+            "files_count": 0,
+            "logs_count": 0,
+            "threads_count": 0
+        }
+
+    total_size_bytes = 0
+    files_count = 0
+    for root, _, files in os.walk(target_path):
+        for f in files:
+            fp = os.path.join(root, f)
+            try:
+                total_size_bytes += os.path.getsize(fp)
+                files_count += 1
+            except OSError:
+                pass
+
+    total_size_mb = round(total_size_bytes / (1024 * 1024), 2)
+
+    # Inspect logs_2.sqlite
+    logs_db_path = target_path / "logs_2.sqlite"
+    logs_count = 0
+    if logs_db_path.exists():
+        try:
+            with sqlite3.connect(str(logs_db_path)) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(*) FROM logs")
+                row = cur.fetchone()
+                if row:
+                    logs_count = row[0]
+        except Exception:
+            pass
+
+    # Inspect state_5.sqlite for threads
+    state_db_path = target_path / "state_5.sqlite"
+    threads_count = 0
+    if state_db_path.exists():
+        try:
+            with sqlite3.connect(str(state_db_path)) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(*) FROM threads")
+                row = cur.fetchone()
+                if row:
+                    threads_count = row[0]
+        except Exception:
+            pass
+
+    return {
+        "exists": True,
+        "path": str(target_path),
+        "total_size_mb": total_size_mb,
+        "files_count": files_count,
+        "logs_count": logs_count,
+        "threads_count": threads_count
+    }
+
 
 db = Database()
+

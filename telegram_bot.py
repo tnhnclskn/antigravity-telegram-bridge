@@ -17,6 +17,7 @@ from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    BotCommand,
     constants
 )
 from telegram.constants import ParseMode, ChatAction
@@ -30,7 +31,7 @@ from telegram.ext import (
 )
 
 from config import settings
-from database import db
+from database import db, get_codex_stats
 from agy_client import agy_client
 from formatter import (
     markdown_to_telegram_html,
@@ -43,6 +44,35 @@ from formatter import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------- Bot Commands Menu & Project Config ---------------- #
+
+BOT_COMMANDS = [
+    BotCommand("newchat", "Yeni oturum başlat"),
+    BotCommand("update", "Projeleri güncelle (git pull)"),
+    BotCommand("usage", "Kullanım ve token istatistikleri"),
+    BotCommand("model", "Model seçimi"),
+    BotCommand("effort", "Düşünme eforu ayarla"),
+    BotCommand("status", "Hub ve oturum durumu"),
+    BotCommand("help", "Yardım ve komut listesi"),
+    BotCommand("cancel", "Aktif işlemi iptal et"),
+]
+
+PROJECTS_TO_UPDATE = [
+    ("Agentic OS", "/root/Projects/agentic-os"),
+    ("Agento CLI", "/root/Projects/agento-cli"),
+    ("Antigravity Telegram Bridge", "/root/Projects/antigravity-telegram-bridge"),
+]
+
+
+async def post_init(application: Application):
+    """Post initialization hook to register bot commands menu with Telegram."""
+    try:
+        await application.bot.set_my_commands(BOT_COMMANDS)
+        logger.info("Telegram Bot commands menu registered successfully.")
+    except Exception as e:
+        logger.warning(f"Failed to register Telegram bot commands menu: {e}")
 
 
 # ---------------- Security & Auth Decorator ---------------- #
@@ -119,6 +149,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("⚙️ Durum", callback_data="cmd_status"),
         ],
         [
+            InlineKeyboardButton("📊 Kullanım", callback_data="cmd_usage"),
+            InlineKeyboardButton("🔄 Güncelle", callback_data="cmd_update"),
+        ],
+        [
             InlineKeyboardButton("🧠 Model Seç", callback_data="cmd_models"),
             InlineKeyboardButton("🎯 Düşünme Seviyesi", callback_data="cmd_efforts"),
         ],
@@ -141,8 +175,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📚 <b>Antigravity Telegram Köprüsü Komut Kılavuzu</b>\n\n"
         "<b>Temel Komutlar:</b>\n"
         "• <code>/start</code> - Başlangıç ekranı ve oturum özeti\n"
-        "• <code>/new</code>, <code>/reset</code> - Mevcut sohbet bağlamını sıfırlar ve yeni oturum açar\n"
+        "• <code>/newchat</code>, <code>/new</code>, <code>/reset</code>, <code>/clear</code> - Mevcut sohbet bağlamını sıfırlar ve yeni oturum açar\n"
         "• <code>/status</code> - Aktif oturum, model, sunucu ve sistem kaynak durumu\n"
+        "• <code>/usage</code> - Token, mesaj ve oturum kullanım istatistikleri (Antigravity & Codex)\n"
+        "• <code>/update</code> - Yerel projeleri günceller (git pull --rebase)\n"
         "• <code>/stop</code>, <code>/cancel</code> - Çalışan Antigravity sürecini durdurur\n"
         "• <code>/model [isim]</code> - Kullanılan yapay zeka modelini görüntüler veya değiştirir\n"
         "• <code>/effort [low|medium|high]</code> - Düşünme / Akıl yürütme seviyesini ayarlar\n"
@@ -173,6 +209,99 @@ async def new_session_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif update.callback_query:
         await update.callback_query.answer("Oturum sıfırlandı!")
         await update.callback_query.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+
+@authorized_only
+async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Pull latest changes for all related projects via git pull --rebase."""
+    target_msg = update.message or (update.callback_query.message if update.callback_query else None)
+    if not target_msg:
+        return
+
+    status_msg = await target_msg.reply_text(
+        "🔄 <b>Projeler güncelleniyor...</b>\n<i>Lütfen bekleyin (git pull --rebase)...</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+    results = []
+    for name, path in PROJECTS_TO_UPDATE:
+        if not os.path.exists(path):
+            results.append(f"📁 <b>{escape_html(name)}:</b>\n❌ <i>Dizin bulunamadı ({escape_html(path)})</i>")
+            continue
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "pull", "--rebase",
+                cwd=path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            out_str = stdout.decode("utf-8", errors="replace").strip()
+            err_str = stderr.decode("utf-8", errors="replace").strip()
+
+            if proc.returncode == 0:
+                if "Already up to date." in out_str or ("Current branch" in out_str and "is up to date" in out_str):
+                    status_line = "✅ <b>Güncel</b> (Değişiklik yok)"
+                else:
+                    first_lines = "\n".join(out_str.splitlines()[:4])
+                    status_line = f"🚀 <b>Güncellendi!</b>\n<pre>{escape_html(first_lines)}</pre>"
+            else:
+                combined_err = err_str or out_str or f"Exit code {proc.returncode}"
+                first_err = "\n".join(combined_err.splitlines()[:3])
+                status_line = f"❌ <b>Hata:</b>\n<code>{escape_html(first_err)}</code>"
+
+            results.append(f"📁 <b>{escape_html(name)}</b> (<code>{escape_html(os.path.basename(path))}</code>):\n{status_line}")
+        except Exception as e:
+            results.append(f"📁 <b>{escape_html(name)}:</b>\n❌ <b>Hata:</b> <code>{escape_html(str(e))}</code>")
+
+    reply_text = "🔄 <b>Git Güncelleme Raporu:</b>\n\n" + "\n\n".join(results)
+    await status_msg.edit_text(reply_text, parse_mode=ParseMode.HTML)
+
+
+@authorized_only
+async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Display Antigravity and Codex usage statistics."""
+    stats = await db.get_usage_stats()
+    codex_stats = get_codex_stats()
+
+    lines = [
+        "📊 <b>Antigravity & Codex Kullanım İstatistikleri</b>\n",
+        "🤖 <b>Antigravity / Hub Köprüsü:</b>",
+        f"• <b>Toplam Oturum:</b> <code>{stats['total_sessions']}</code>",
+        f"• <b>Toplam Mesaj:</b> <code>{stats['total_messages']}</code> (👤 {stats['user_messages']} / 🤖 {stats['assistant_messages']})",
+        f"• <b>Son 24 Saat Mesajı:</b> <code>{stats['messages_24h']}</code>",
+        f"• <b>Tahmini Toplam Token:</b> <code>{stats['total_tokens_est']:,}</code>",
+        f"• <b>Son 24 Saat Token:</b> <code>{stats['tokens_24h_est']:,}</code>",
+        f"• <b>Ortalama Yanıt Süresi:</b> <code>{stats['avg_latency']}s</code> ({stats['recorded_latencies_count']} kayıt)",
+        "",
+        "🧬 <b>Codex Ortamı:</b>"
+    ]
+
+    if codex_stats.get("exists"):
+        lines.extend([
+            f"• <b>Dizin Boyutu:</b> <code>{codex_stats['total_size_mb']} MB</code> ({codex_stats['files_count']} dosya)",
+            f"• <b>Toplam Log Kaydı:</b> <code>{codex_stats['logs_count']:,}</code>",
+            f"• <b>Oturum (Thread) Sayısı:</b> <code>{codex_stats['threads_count']}</code>",
+            f"• <b>Dizin Yolu:</b> <code>{escape_html(codex_stats['path'])}</code>"
+        ])
+    else:
+        lines.append(f"• <i>Codex dizini ({escape_html(codex_stats['path'])}) bulunamadı.</i>")
+
+    reply_text = "\n".join(lines)
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Yenile", callback_data="cmd_usage"),
+            InlineKeyboardButton("⚙️ Durum", callback_data="cmd_status")
+        ]
+    ]
+
+    if update.message:
+        await update.message.reply_text(reply_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(reply_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+
 
 
 @authorized_only
@@ -422,6 +551,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_command(update, context)
     elif data == "cmd_help":
         await help_command(update, context)
+    elif data == "cmd_usage":
+        await usage_command(update, context)
+    elif data == "cmd_update":
+        await update_command(update, context)
     elif data == "cmd_models":
         models = await agy_client.get_available_models()
         session = await db.get_session(user_id)
@@ -608,8 +741,17 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
     if not accumulated_response.strip():
         accumulated_response = "<i>(Antigravity boş yanıt döndürdü)</i>"
 
-    # Save to history with tool metadata
-    metadata_str = json.dumps({"tools": executed_tools}) if executed_tools else None
+    # Save to history with tool metadata, usage, and latency duration
+    metadata_dict = {}
+    if executed_tools:
+        metadata_dict["tools"] = executed_tools
+    if final_result_data:
+        if "usage" in final_result_data and final_result_data["usage"]:
+            metadata_dict["usage"] = final_result_data["usage"]
+        if "duration_seconds" in final_result_data and final_result_data["duration_seconds"] is not None:
+            metadata_dict["duration_seconds"] = final_result_data["duration_seconds"]
+
+    metadata_str = json.dumps(metadata_dict) if metadata_dict else None
     await db.add_history(user_id, conversation_id, "user", prompt_text)
     await db.add_history(user_id, conversation_id, "assistant", accumulated_response, metadata=metadata_str)
 
@@ -665,15 +807,18 @@ def build_application() -> Application:
         Application.builder()
         .token(settings.TELEGRAM_BOT_TOKEN)
         .concurrent_updates(True)
+        .post_init(post_init)
         .build()
     )
 
     # Command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler(["new", "reset", "clear"], new_session_command))
+    application.add_handler(CommandHandler(["newchat", "new", "reset", "clear"], new_session_command))
     application.add_handler(CommandHandler(["cancel", "stop"], cancel_command))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("update", update_command))
+    application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("model", model_command))
     application.add_handler(CommandHandler("effort", effort_command))
     application.add_handler(CommandHandler(["workspace", "cwd", "dir"], workspace_command))

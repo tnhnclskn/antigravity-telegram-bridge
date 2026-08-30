@@ -2,7 +2,7 @@ import asyncio
 import json
 
 import pytest
-from agy_client import AgyClient
+from agy_client import AgyClient, normalize_model_name
 
 
 @pytest.mark.asyncio
@@ -16,7 +16,7 @@ async def test_agy_models():
 
 
 @pytest.mark.asyncio
-async def test_prompt_stream_omits_conflicting_effort(monkeypatch):
+async def test_prompt_stream_normalizes_model_and_passes_effort(monkeypatch):
     client = AgyClient(bin_path="agy")
     captured = {}
 
@@ -55,7 +55,9 @@ async def test_prompt_stream_omits_conflicting_effort(monkeypatch):
         effort="high",
     )]
 
-    assert "--effort" not in captured["args"]
+    assert "--model" in captured["args"]
+    assert captured["args"][captured["args"].index("--model") + 1] == "gemini-3.1-pro"
+    assert captured["args"][captured["args"].index("--effort") + 1] == "high"
     assert events[-1]["response"] == "OK"
 
 
@@ -68,10 +70,9 @@ def test_agy_cancel_nonexistent_task():
     client.cancel_all()
 
 
-def test_model_effort_is_not_duplicated():
-    client = AgyClient()
-
-    assert client._model_embeds_effort("gemini-3.1-pro-low") is True
-    assert client._model_embeds_effort("gemini-3.7-flash-high") is True
-    assert client._model_embeds_effort("claude-sonnet-4-6") is False
-    assert client._model_embeds_effort(None) is False
+def test_model_names_are_normalized_for_separate_effort_selection():
+    assert normalize_model_name("gemini-3.1-pro-low") == "gemini-3.1-pro"
+    assert normalize_model_name("gemini-3.7-flash-high") == "gemini-3.7-flash"
+    assert normalize_model_name("gpt-oss-120b-medium") == "gpt-oss-120b"
+    assert normalize_model_name("claude-sonnet-4-6") == "claude-sonnet-4-6"
+    assert normalize_model_name(None) is None

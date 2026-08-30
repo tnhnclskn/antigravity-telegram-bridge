@@ -33,7 +33,7 @@ from telegram.ext import (
 
 from config import settings
 from database import db, get_codex_stats
-from agy_client import agy_client
+from agy_client import agy_client, normalize_model_name
 from formatter import (
     markdown_to_telegram_html,
     split_text_chunks,
@@ -126,7 +126,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_admin = await db.is_admin(user.id)
 
     conv_id = session.get("conversation_id") or "Yeni Oturum (Henüz başlatılmadı)"
-    model = session.get("model") or settings.DEFAULT_MODEL
+    model = normalize_model_name(session.get("model") or settings.DEFAULT_MODEL)
     effort = session.get("effort") or settings.DEFAULT_EFFORT
     workspace = session.get("workspace") or settings.DEFAULT_WORKSPACE
 
@@ -328,7 +328,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_gb = total // (2**30)
 
     conv_id = session.get("conversation_id") or "Yok (İlk mesajda oluşturulacak)"
-    model = session.get("model") or settings.DEFAULT_MODEL
+    model = normalize_model_name(session.get("model") or settings.DEFAULT_MODEL)
     effort = session.get("effort") or settings.DEFAULT_EFFORT
     workspace = session.get("workspace") or settings.DEFAULT_WORKSPACE
     auto_approve = "Açık (Otonom)" if session.get("auto_approve") else "Kapalı"
@@ -365,7 +365,7 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
 
     if args:
-        new_model = args[0].strip()
+        new_model = normalize_model_name(args[0].strip())
         await db.update_session(user.id, model=new_model)
         await update.message.reply_text(
             f"✅ <b>Model değiştirildi:</b> <code>{escape_html(new_model)}</code>",
@@ -376,7 +376,7 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # If no args, show interactive selector
     models = await agy_client.get_available_models()
     session = await db.get_session(user.id)
-    current_model = session.get("model", settings.DEFAULT_MODEL)
+    current_model = normalize_model_name(session.get("model") or settings.DEFAULT_MODEL)
 
     keyboard = []
     for m in models:
@@ -559,7 +559,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_models":
         models = await agy_client.get_available_models()
         session = await db.get_session(user_id)
-        current = session.get("model", settings.DEFAULT_MODEL)
+        current = normalize_model_name(session.get("model") or settings.DEFAULT_MODEL)
         kb = [[InlineKeyboardButton(f"{'✅ ' if m == current else ''}{m}", callback_data=f"set_model:{m}")] for m in models]
         await query.message.reply_text("🤖 <b>Model Seçin:</b>", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
     elif data == "cmd_efforts":
@@ -572,7 +572,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await query.message.reply_text("🎯 <b>Düşünme Seviyesi Seçin:</b>", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
     elif data.startswith("set_model:"):
-        model_name = data.split(":", 1)[1]
+        model_name = normalize_model_name(data.split(":", 1)[1])
         await db.update_session(user_id, model=model_name)
         await query.edit_message_text(f"✅ <b>Model güncellendi:</b> <code>{escape_html(model_name)}</code>", parse_mode=ParseMode.HTML)
     elif data.startswith("set_effort:"):

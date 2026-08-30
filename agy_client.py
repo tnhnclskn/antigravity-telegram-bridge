@@ -17,6 +17,18 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+MODEL_EFFORT_SUFFIXES = {"low", "medium", "high"}
+
+
+def normalize_model_name(model: Optional[str]) -> Optional[str]:
+    """Remove an agy catalog effort suffix so effort can be selected separately."""
+    if not model:
+        return model
+    name, separator, suffix = model.rpartition("-")
+    if separator and suffix.lower() in MODEL_EFFORT_SUFFIXES:
+        return name
+    return model
+
 
 class AgyClient:
     def __init__(self, bin_path: Optional[str] = None):
@@ -57,13 +69,6 @@ class AgyClient:
             return False
         return True
 
-    @staticmethod
-    def _model_embeds_effort(model: Optional[str]) -> bool:
-        """Return whether the selected model already contains its effort level."""
-        if not model:
-            return False
-        return model.rsplit("-", 1)[-1].lower() in {"low", "medium", "high"}
-
     async def run_prompt_stream(
         self,
         user_id: Union[int, str],
@@ -94,13 +99,11 @@ class AgyClient:
         if conversation_id:
             cmd.extend(["--conversation", conversation_id])
 
+        model = normalize_model_name(model)
         if model:
             cmd.extend(["--model", model])
 
-        # Current agy rejects combinations such as
-        # gemini-3.1-pro-low + --effort=high. The model catalog encodes the
-        # effort in the model name for these models, so do not send both.
-        if effort and not self._model_embeds_effort(model):
+        if effort:
             cmd.extend(["--effort", effort])
 
         if workspace_dir:
@@ -243,11 +246,11 @@ class AgyClient:
                 # First column is model name
                 parts = line.split()
                 if parts:
-                    models.append(parts[0])
-            return models or ["gemini-3.7-flash-high", "gemini-3.1-pro-high", "claude-sonnet-4-6"]
+                    models.append(normalize_model_name(parts[0]))
+            return list(dict.fromkeys(models)) or ["gemini-3.7-flash", "gemini-3.1-pro", "claude-sonnet-4-6"]
         except Exception as e:
             logger.error(f"Failed to fetch models: {e}")
-            return ["gemini-3.7-flash-high", "gemini-3.1-pro-high", "claude-sonnet-4-6"]
+            return ["gemini-3.7-flash", "gemini-3.1-pro", "claude-sonnet-4-6"]
 
     @staticmethod
     def get_system_stats() -> Dict[str, Any]:

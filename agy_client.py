@@ -88,6 +88,19 @@ class AgyClient:
             self._active_processes.pop(uid, None)
         return len(self._active_processes)
 
+    async def send_input(self, user_id: Union[int, str], text: str) -> bool:
+        """Send standard input to an active agy process."""
+        proc = self._active_processes.get(user_id)
+        if proc and proc.returncode is None and proc.stdin:
+            try:
+                proc.stdin.write(f"{text}\n".encode("utf-8"))
+                await proc.stdin.drain()
+                logger.info(f"Sent stdin input to agy process {proc.pid} for session {user_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Error sending input to process for session {user_id}: {e}")
+        return False
+
     async def run_prompt_stream(
         self,
         user_id: Union[int, str],
@@ -136,6 +149,7 @@ class AgyClient:
                 cwd=workspace_dir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.PIPE,
                 env=os.environ.copy(),
                 start_new_session=True
             )

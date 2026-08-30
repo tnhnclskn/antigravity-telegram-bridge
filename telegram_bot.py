@@ -1028,6 +1028,15 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
 
     # 2. Implement User Queue with Lock
     user_lock = USER_LOCKS.setdefault(user_id, asyncio.Lock())
+    
+    if user_lock.locked() and agy_client.is_running(user_id):
+        prompt_text = message.text or message.caption or ""
+        if prompt_text:
+            success = await agy_client.send_input(user_id, prompt_text)
+            if success:
+                await message.reply_text("💬 <b>Mesajınız (input) aktif sürece iletildi.</b>", parse_mode=ParseMode.HTML)
+                return
+
     if user_lock.locked():
         await message.reply_text(
             "⏳ <b>Mesajınız kuyruğa alındı, aktif işlem bitince işlenecek.</b>",

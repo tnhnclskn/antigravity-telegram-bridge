@@ -184,3 +184,32 @@ def test_agy_get_active_count():
     assert "user1" not in client._active_processes
     assert "user2" in client._active_processes
 
+
+@pytest.mark.asyncio
+async def test_agy_send_input():
+    client = AgyClient()
+    
+    class DummyStdin:
+        def __init__(self):
+            self.written = b""
+        def write(self, data):
+            self.written += data
+        async def drain(self):
+            pass
+            
+    class DummyProc:
+        def __init__(self):
+            self.returncode = None
+            self.stdin = DummyStdin()
+            self.pid = 12345
+            
+    proc = DummyProc()
+    client._active_processes[1] = proc
+    
+    success = await client.send_input(1, "my input text")
+    assert success is True
+    assert proc.stdin.written == b"my input text\n"
+    
+    # Test non-existent process
+    success = await client.send_input(2, "fail")
+    assert success is False

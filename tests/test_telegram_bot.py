@@ -1323,3 +1323,63 @@ async def test_restart_command_unauthorized(monkeypatch):
 
 
 
+
+@pytest.mark.asyncio
+async def test_handle_incoming_message_send_input(monkeypatch):
+    import telegram_bot
+    from telegram_bot import handle_incoming_message
+    from unittest.mock import AsyncMock
+
+    class DummyUser:
+        id = 123
+        username = "test"
+        full_name = "test"
+        
+    class DummyChat:
+        id = 456
+        
+    class DummyMessage:
+        def __init__(self, text="test input"):
+            self.text = text
+            self.caption = None
+            self.photo = None
+            self.document = None
+            self.voice = None
+            self.audio = None
+            self.chat_id = DummyChat.id
+            self.replies = []
+            
+        async def reply_text(self, text, parse_mode=None):
+            self.replies.append(text)
+            
+    class DummyUpdate:
+        def __init__(self):
+            self.message = DummyMessage()
+            self.effective_user = DummyUser()
+            
+    update = DummyUpdate()
+    
+    # Mock auth
+    monkeypatch.setattr("database.db.is_whitelisted", AsyncMock(return_value=True))
+    
+    # Mock agy_client
+    send_input_called = False
+    async def mock_send_input(user_id, text):
+        nonlocal send_input_called
+        send_input_called = True
+        return True
+        
+    monkeypatch.setattr("telegram_bot.agy_client.is_running", lambda uid: True)
+    monkeypatch.setattr("telegram_bot.agy_client.send_input", mock_send_input)
+    
+    # Lock the user
+    import asyncio
+    lock = asyncio.Lock()
+    await lock.acquire()
+    telegram_bot.USER_LOCKS[123] = lock
+    
+    # Call handler
+    await handle_incoming_message(update, None)
+    
+    assert send_input_called is True
+    assert "aktif sürece iletildi" in update.message.replies[0]

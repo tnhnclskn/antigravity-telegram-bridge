@@ -4,6 +4,8 @@ Manages conversations, streaming feedback, media handling, and admin controls.
 """
 
 import asyncio
+
+USER_LOCKS: dict[int, asyncio.Lock] = {}
 import json
 import logging
 import os
@@ -801,231 +803,232 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
     chat_id = message.chat_id
     user_id = user.id
 
-    # 1. Prevent concurrent task execution for the same user
-    if agy_client.is_running(user_id):
+    # 1. Implement User Queue with Lock
+    user_lock = USER_LOCKS.setdefault(user_id, asyncio.Lock())
+    if user_lock.locked():
         await message.reply_text(
-            "⏳ <b>Zaten devam eden aktif bir işleminiz var.</b>\n\n"
-            "Lütfen mevcut yanıtın tamamlanmasını bekleyin veya işlemi durdurmak için <code>/cancel</code> komutunu gönderin.",
+            "⏳ <b>Mesajınız kuyruğa alındı, aktif işlem bitince işlenecek.</b>",
             parse_mode=ParseMode.HTML
         )
-        return
+    
+    async with user_lock:
 
-    # 2. Extract prompt and handle attachments
-    prompt_text = message.text or message.caption or ""
-    attachment_paths = []
-    ts = int(time.time())
+        # 2. Extract prompt and handle attachments
+        prompt_text = message.text or message.caption or ""
+        attachment_paths = []
+        ts = int(time.time())
 
-    # Handle Photo
-    if message.photo:
-        photo = message.photo[-1]
-        file_obj = await photo.get_file()
-        dest_file = settings.TEMP_MEDIA_DIR / f"photo_{user_id}_{ts}_{file_obj.file_unique_id}.jpg"
-        await file_obj.download_to_drive(dest_file)
-        attachment_paths.append(str(dest_file.resolve()))
-        logger.info(f"Downloaded photo attachment to {dest_file}")
+        # Handle Photo
+        if message.photo:
+            photo = message.photo[-1]
+            file_obj = await photo.get_file()
+            dest_file = settings.TEMP_MEDIA_DIR / f"photo_{user_id}_{ts}_{file_obj.file_unique_id}.jpg"
+            await file_obj.download_to_drive(dest_file)
+            attachment_paths.append(str(dest_file.resolve()))
+            logger.info(f"Downloaded photo attachment to {dest_file}")
 
-    # Handle Document
-    if message.document:
-        doc = message.document
-        file_obj = await doc.get_file()
-        filename = doc.file_name or f"doc_{file_obj.file_unique_id}"
-        dest_file = settings.TEMP_MEDIA_DIR / f"{user_id}_{ts}_{filename}"
-        await file_obj.download_to_drive(dest_file)
-        attachment_paths.append(str(dest_file.resolve()))
-        logger.info(f"Downloaded document attachment to {dest_file}")
+        # Handle Document
+        if message.document:
+            doc = message.document
+            file_obj = await doc.get_file()
+            filename = doc.file_name or f"doc_{file_obj.file_unique_id}"
+            dest_file = settings.TEMP_MEDIA_DIR / f"{user_id}_{ts}_{filename}"
+            await file_obj.download_to_drive(dest_file)
+            attachment_paths.append(str(dest_file.resolve()))
+            logger.info(f"Downloaded document attachment to {dest_file}")
 
-    # Handle Voice
-    if message.voice:
-        voice = message.voice
-        file_obj = await voice.get_file()
-        dest_file = settings.TEMP_MEDIA_DIR / f"voice_{user_id}_{ts}_{file_obj.file_unique_id}.ogg"
-        await file_obj.download_to_drive(dest_file)
-        attachment_paths.append(str(dest_file.resolve()))
-        logger.info(f"Downloaded voice attachment to {dest_file}")
+        # Handle Voice
+        if message.voice:
+            voice = message.voice
+            file_obj = await voice.get_file()
+            dest_file = settings.TEMP_MEDIA_DIR / f"voice_{user_id}_{ts}_{file_obj.file_unique_id}.ogg"
+            await file_obj.download_to_drive(dest_file)
+            attachment_paths.append(str(dest_file.resolve()))
+            logger.info(f"Downloaded voice attachment to {dest_file}")
 
-    # Handle Audio
-    if message.audio:
-        audio = message.audio
-        file_obj = await audio.get_file()
-        filename = audio.file_name or f"audio_{file_obj.file_unique_id}.mp3"
-        dest_file = settings.TEMP_MEDIA_DIR / f"audio_{user_id}_{ts}_{filename}"
-        await file_obj.download_to_drive(dest_file)
-        attachment_paths.append(str(dest_file.resolve()))
-        logger.info(f"Downloaded audio attachment to {dest_file}")
+        # Handle Audio
+        if message.audio:
+            audio = message.audio
+            file_obj = await audio.get_file()
+            filename = audio.file_name or f"audio_{file_obj.file_unique_id}.mp3"
+            dest_file = settings.TEMP_MEDIA_DIR / f"audio_{user_id}_{ts}_{filename}"
+            await file_obj.download_to_drive(dest_file)
+            attachment_paths.append(str(dest_file.resolve()))
+            logger.info(f"Downloaded audio attachment to {dest_file}")
 
-    # Construct final prompt with attachment notes if present
-    if attachment_paths:
-        attachments_note = "\n".join(f"Ekli dosya/medya: {p}" for p in attachment_paths)
-        if prompt_text:
-            prompt_text = f"{prompt_text}\n\n{attachments_note}"
-        else:
-            prompt_text = attachments_note
+        # Construct final prompt with attachment notes if present
+        if attachment_paths:
+            attachments_note = "\n".join(f"Ekli dosya/medya: {p}" for p in attachment_paths)
+            if prompt_text:
+                prompt_text = f"{prompt_text}\n\n{attachments_note}"
+            else:
+                prompt_text = attachments_note
 
-        if not prompt_text:
-            prompt_text = f"Please inspect the attached file(s):\n{attachments_note}"
+            if not prompt_text:
+                prompt_text = f"Please inspect the attached file(s):\n{attachments_note}"
 
-    if not prompt_text.strip():
-        await message.reply_text("ℹ️ Lütfen bir mesaj veya dosya gönderin.")
-        return
+        if not prompt_text.strip():
+            await message.reply_text("ℹ️ Lütfen bir mesaj veya dosya gönderin.")
+            return
 
-    # 3. Get user session configuration
-    session = await db.get_session(user_id)
-    conversation_id = session.get("conversation_id")
-    model = session.get("model") or settings.DEFAULT_MODEL
-    effort = session.get("effort") or settings.DEFAULT_EFFORT
-    workspace = session.get("workspace") or settings.DEFAULT_WORKSPACE
-    auto_approve = bool(session.get("auto_approve", 1))
+        # 3. Get user session configuration
+        session = await db.get_session(user_id)
+        conversation_id = session.get("conversation_id")
+        model = session.get("model") or settings.DEFAULT_MODEL
+        effort = session.get("effort") or settings.DEFAULT_EFFORT
+        workspace = session.get("workspace") or settings.DEFAULT_WORKSPACE
+        auto_approve = bool(session.get("auto_approve", 1))
 
-    # 4. Send initial progress message & start typing background task
-    status_msg = await message.reply_text(
-        "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>",
-        parse_mode=ParseMode.HTML
-    )
+        # 4. Send initial progress message & start typing background task
+        status_msg = await message.reply_text(
+            "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>",
+            parse_mode=ParseMode.HTML
+        )
 
-    stop_typing = asyncio.Event()
-    typing_task = asyncio.create_task(send_typing_periodically(chat_id, context.bot, stop_typing))
+        stop_typing = asyncio.Event()
+        typing_task = asyncio.create_task(send_typing_periodically(chat_id, context.bot, stop_typing))
 
-    last_edit_time = time.time()
-    last_status_text = ""
-    accumulated_response = ""
-    final_result_data = None
-    executed_tools: List[Dict[str, Any]] = []
+        last_edit_time = time.time()
+        last_status_text = ""
+        accumulated_response = ""
+        final_result_data = None
+        executed_tools: List[Dict[str, Any]] = []
 
-    try:
-        # 5. Stream response from Antigravity CLI
-        async for event in agy_client.run_prompt_stream(
-            user_id=user_id,
-            prompt=prompt_text,
-            conversation_id=conversation_id,
-            workspace=workspace,
-            model=model,
-            effort=effort,
-            auto_approve=auto_approve
-        ):
-            event_type = event.get("type")
-
-            if event_type == "init":
-                new_conv_id = event.get("conversation_id")
-                if new_conv_id and new_conv_id != conversation_id:
-                    conversation_id = new_conv_id
-                    await db.update_session(user_id, conversation_id=new_conv_id)
-
-            elif event_type == "step_update":
-                step_type = event.get("step_type")
-                tool_name = event.get("tool_name")
-                state = event.get("state", "running")
-                tool_info = event.get("tool_info", {})
-                duration = event.get("duration_seconds")
-
-                if tool_name:
-                    existing = next((t for t in executed_tools if t.get("tool_name") == tool_name and t.get("tool_info") == tool_info), None)
-                    if existing:
-                        existing["state"] = state
-                        if duration is not None:
-                            existing["duration_seconds"] = duration
-                    else:
-                        executed_tools.append({
-                            "tool_name": tool_name,
-                            "tool_info": tool_info,
-                            "state": state,
-                            "duration_seconds": duration
-                        })
-
-                    current_status = format_cumulative_status_telegram(executed_tools)
-
-                    # Update status message with debouncing
-                    now = time.time()
-                    if current_status != last_status_text and (now - last_edit_time) >= settings.STREAM_EDIT_INTERVAL:
-                        try:
-                            await status_msg.edit_text(current_status, parse_mode=ParseMode.HTML)
-                            last_status_text = current_status
-                            last_edit_time = now
-                        except Exception:
-                            pass
-
-            elif event_type == "result":
-                final_result_data = event
-                accumulated_response = event.get("response", "")
-                res_conv_id = event.get("conversation_id")
-                if res_conv_id:
-                    conversation_id = res_conv_id
-                    await db.update_session(user_id, conversation_id=res_conv_id)
-
-            elif event_type == "error":
-                err_text = event.get("error", "Bilinmeyen hata")
-                accumulated_response = f"⚠️ <b>Hata:</b>\n<code>{escape_html(err_text)}</code>"
-
-    except Exception as e:
-        logger.exception(f"Error processing prompt for user {user_id}")
-        accumulated_response = f"❌ <b>Bir hata oluştu:</b>\n<code>{escape_html(str(e))}</code>"
-    finally:
-        stop_typing.set()
-        await typing_task
-
-    # 6. Format and deliver the response
-    if not accumulated_response.strip():
-        accumulated_response = "<i>(Antigravity boş yanıt döndürdü)</i>"
-
-    # Save to history with tool metadata, usage, and latency duration
-    metadata_dict = {}
-    if executed_tools:
-        metadata_dict["tools"] = executed_tools
-    if final_result_data:
-        if "usage" in final_result_data and final_result_data["usage"]:
-            metadata_dict["usage"] = final_result_data["usage"]
-        if "duration_seconds" in final_result_data and final_result_data["duration_seconds"] is not None:
-            metadata_dict["duration_seconds"] = final_result_data["duration_seconds"]
-
-    metadata_str = json.dumps(metadata_dict) if metadata_dict else None
-    await db.add_history(user_id, conversation_id, "user", prompt_text)
-    await db.add_history(user_id, conversation_id, "assistant", accumulated_response, metadata=metadata_str)
-
-    # 6a. Finalize the stages status message
-    if executed_tools:
-        stages_summary = format_execution_stages_telegram(executed_tools)
-        if stages_summary:
-            if len(stages_summary) > 3800:
-                stages_summary = stages_summary[:3750] + "\n... (kısaltıldı)"
-            try:
-                await status_msg.edit_text(stages_summary, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-            except Exception as e:
-                logger.warning(f"Failed to edit status message with HTML stages: {e}")
-                try:
-                    plain_stages = re.sub(r"<[^>]+>", "", stages_summary)
-                    await status_msg.edit_text(plain_stages[:3800], disable_web_page_preview=True)
-                except Exception:
-                    pass
-    else:
-        # If no tools were executed, delete the temporary 'Thinking...' progress message
         try:
-            await status_msg.delete()
-        except Exception:
-            pass
+            # 5. Stream response from Antigravity CLI
+            async for event in agy_client.run_prompt_stream(
+                user_id=user_id,
+                prompt=prompt_text,
+                conversation_id=conversation_id,
+                workspace=workspace,
+                model=model,
+                effort=effort,
+                auto_approve=auto_approve
+            ):
+                event_type = event.get("type")
 
-    # 6b. Convert markdown to Telegram HTML for the final result text
-    formatted_html = markdown_to_telegram_html(accumulated_response)
+                if event_type == "init":
+                    new_conv_id = event.get("conversation_id")
+                    if new_conv_id and new_conv_id != conversation_id:
+                        conversation_id = new_conv_id
+                        await db.update_session(user_id, conversation_id=new_conv_id)
 
-    # Add footer if stats are available
-    if final_result_data:
-        duration = final_result_data.get("duration_seconds", 0.0)
-        usage = final_result_data.get("usage")
-        footer = format_stats_footer(duration, usage)
-        formatted_html += f"\n\n<blockquote>{escape_html(footer)}</blockquote>"
+                elif event_type == "step_update":
+                    step_type = event.get("step_type")
+                    tool_name = event.get("tool_name")
+                    state = event.get("state", "running")
+                    tool_info = event.get("tool_info", {})
+                    duration = event.get("duration_seconds")
 
-    # Split into message chunks safe for Telegram (<= 3800 chars)
-    chunks = split_text_chunks(formatted_html, max_chars=settings.MAX_TELEGRAM_MESSAGE_LEN)
+                    if tool_name:
+                        existing = next((t for t in executed_tools if t.get("tool_name") == tool_name and t.get("tool_info") == tool_info), None)
+                        if existing:
+                            existing["state"] = state
+                            if duration is not None:
+                                existing["duration_seconds"] = duration
+                        else:
+                            executed_tools.append({
+                                "tool_name": tool_name,
+                                "tool_info": tool_info,
+                                "state": state,
+                                "duration_seconds": duration
+                            })
 
-    # Send final result as a BRAND NEW message so it triggers a fresh notification & sound
-    for chunk in chunks:
-        try:
-            await message.reply_text(chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+                        current_status = format_cumulative_status_telegram(executed_tools)
+
+                        # Update status message with debouncing
+                        now = time.time()
+                        if current_status != last_status_text and (now - last_edit_time) >= settings.STREAM_EDIT_INTERVAL:
+                            try:
+                                await status_msg.edit_text(current_status, parse_mode=ParseMode.HTML)
+                                last_status_text = current_status
+                                last_edit_time = now
+                            except Exception:
+                                pass
+
+                elif event_type == "result":
+                    final_result_data = event
+                    accumulated_response = event.get("response", "")
+                    res_conv_id = event.get("conversation_id")
+                    if res_conv_id:
+                        conversation_id = res_conv_id
+                        await db.update_session(user_id, conversation_id=res_conv_id)
+
+                elif event_type == "error":
+                    err_text = event.get("error", "Bilinmeyen hata")
+                    accumulated_response = f"⚠️ <b>Hata:</b>\n<code>{escape_html(err_text)}</code>"
+
         except Exception as e:
-            logger.warning(f"HTML reply failed for chunk, falling back to plain text: {e}")
-            plain_chunk = re.sub(r"<[^>]+>", "", chunk) or chunk
+            logger.exception(f"Error processing prompt for user {user_id}")
+            accumulated_response = f"❌ <b>Bir hata oluştu:</b>\n<code>{escape_html(str(e))}</code>"
+        finally:
+            stop_typing.set()
+            await typing_task
+
+        # 6. Format and deliver the response
+        if not accumulated_response.strip():
+            accumulated_response = "<i>(Antigravity boş yanıt döndürdü)</i>"
+
+        # Save to history with tool metadata, usage, and latency duration
+        metadata_dict = {}
+        if executed_tools:
+            metadata_dict["tools"] = executed_tools
+        if final_result_data:
+            if "usage" in final_result_data and final_result_data["usage"]:
+                metadata_dict["usage"] = final_result_data["usage"]
+            if "duration_seconds" in final_result_data and final_result_data["duration_seconds"] is not None:
+                metadata_dict["duration_seconds"] = final_result_data["duration_seconds"]
+
+        metadata_str = json.dumps(metadata_dict) if metadata_dict else None
+        await db.add_history(user_id, conversation_id, "user", prompt_text)
+        await db.add_history(user_id, conversation_id, "assistant", accumulated_response, metadata=metadata_str)
+
+        # 6a. Finalize the stages status message
+        if executed_tools:
+            stages_summary = format_execution_stages_telegram(executed_tools)
+            if stages_summary:
+                if len(stages_summary) > 3800:
+                    stages_summary = stages_summary[:3750] + "\n... (kısaltıldı)"
+                try:
+                    await status_msg.edit_text(stages_summary, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+                except Exception as e:
+                    logger.warning(f"Failed to edit status message with HTML stages: {e}")
+                    try:
+                        plain_stages = re.sub(r"<[^>]+>", "", stages_summary)
+                        await status_msg.edit_text(plain_stages[:3800], disable_web_page_preview=True)
+                    except Exception:
+                        pass
+        else:
+            # If no tools were executed, delete the temporary 'Thinking...' progress message
             try:
-                await message.reply_text(plain_chunk, disable_web_page_preview=True)
-            except Exception as fallback_err:
-                logger.error(f"Fallback plain text reply failed: {fallback_err}")
+                await status_msg.delete()
+            except Exception:
+                pass
+
+        # 6b. Convert markdown to Telegram HTML for the final result text
+        formatted_html = markdown_to_telegram_html(accumulated_response)
+
+        # Add footer if stats are available
+        if final_result_data:
+            duration = final_result_data.get("duration_seconds", 0.0)
+            usage = final_result_data.get("usage")
+            footer = format_stats_footer(duration, usage)
+            formatted_html += f"\n\n<blockquote>{escape_html(footer)}</blockquote>"
+
+        # Split into message chunks safe for Telegram (<= 3800 chars)
+        chunks = split_text_chunks(formatted_html, max_chars=settings.MAX_TELEGRAM_MESSAGE_LEN)
+
+        # Send final result as a BRAND NEW message so it triggers a fresh notification & sound
+        for chunk in chunks:
+            try:
+                await message.reply_text(chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            except Exception as e:
+                logger.warning(f"HTML reply failed for chunk, falling back to plain text: {e}")
+                plain_chunk = re.sub(r"<[^>]+>", "", chunk) or chunk
+                try:
+                    await message.reply_text(plain_chunk, disable_web_page_preview=True)
+                except Exception as fallback_err:
+                    logger.error(f"Fallback plain text reply failed: {fallback_err}")
 
 
 # ---------------- Application Setup ---------------- #

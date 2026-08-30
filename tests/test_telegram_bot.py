@@ -423,18 +423,36 @@ async def test_build_application():
 
 @pytest.mark.asyncio
 async def test_handle_incoming_message_concurrent_guard(monkeypatch):
-    """Test that concurrent messages from the same user are rejected with a warning."""
-    from telegram_bot import handle_incoming_message
+    """Test that concurrent messages are queued and notified."""
+    import asyncio
+    from telegram_bot import handle_incoming_message, USER_LOCKS
     update = create_mock_update(user_id=1007, username="user7", text="Hello while busy")
-    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+    update.message.photo = None
+    update.message.document = None
+    update.message.voice = None
+    update.message.audio = None
+    update.message.caption = None
+    context = MagicMock()
 
-    # Mock agy_client.is_running to return True
-    monkeypatch.setattr(telegram_bot.agy_client, "is_running", lambda uid: True)
-
-    await handle_incoming_message(update, context)
+    # Create a locked lock
+    lock = asyncio.Lock()
+    await lock.acquire()
+    USER_LOCKS[1007] = lock
+    
+    # Run the handler as a task because it will block on async with lock
+    task = asyncio.create_task(handle_incoming_message(update, context))
+    
+    # Yield control to let task run and print the queue message
+    await asyncio.sleep(0.1)
+    
     update.message.reply_text.assert_awaited_once()
     reply_text = update.message.reply_text.call_args[0][0]
-    assert "Zaten devam eden aktif bir işleminiz var" in reply_text
+    assert "kuyruğa alındı" in reply_text
+    
+    # Release the lock so task can finish, but we also mock agy_client stream to return immediately
+    monkeypatch.setattr("telegram_bot.agy_client.run_prompt_stream", AsyncMock(return_value=None))
+    lock.release()
+    await task
 
 
 @pytest.mark.asyncio

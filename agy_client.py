@@ -219,6 +219,7 @@ class AgyClient:
                         "accumulated_text": accumulated_text,
                         "tool_name": step_update.get("tool_name"),
                         "tool_info": step_update.get("tool_info", {}),
+                        "active_subagents": step_update.get("active_subagents") or event.get("active_subagents"),
                         "duration_seconds": step_update.get("duration_seconds")
                     }
 

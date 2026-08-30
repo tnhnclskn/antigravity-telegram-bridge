@@ -213,3 +213,56 @@ async def test_agy_send_input():
     # Test non-existent process
     success = await client.send_input(2, "fail")
     assert success is False
+
+
+@pytest.mark.asyncio
+async def test_prompt_stream_with_active_subagents_event(monkeypatch):
+    client = AgyClient(bin_path="agy")
+
+    class FakeReader:
+        def __init__(self, lines):
+            self.lines = iter(lines)
+
+        async def readline(self):
+            try:
+                return next(self.lines)
+            except StopIteration:
+                await asyncio.sleep(0)
+                return b""
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self):
+            events = [
+                {"event": "init", "conversation_id": "conv-sub-1"},
+                {
+                    "event": "step_update",
+                    "step_update": {
+                        "step_type": "tool",
+                        "state": "ACTIVE",
+                        "tool_name": "invoke_subagent",
+                        "active_subagents": [{"name": "Araştırmacı", "status": "running"}]
+                    }
+                },
+                {"event": "result", "result": {"response": "Done"}}
+            ]
+            self.stdout = FakeReader([json.dumps(e).encode() + b"\n" for e in events])
+            self.stderr = FakeReader([])
+
+        async def wait(self):
+            return self.returncode
+
+    async def fake_create(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    events = [event async for event in client.run_prompt_stream(
+        user_id="test_sub",
+        prompt="Execute task with subagent"
+    )]
+
+    assert len(events) == 3
+    assert events[1]["type"] == "step_update"
+    assert events[1]["active_subagents"] == [{"name": "Araştırmacı", "status": "running"}]
+

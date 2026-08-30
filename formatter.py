@@ -5,7 +5,7 @@ Converts Markdown to clean, safe Telegram HTML and splits long responses.
 
 import re
 import html
-from typing import List, Optional
+from typing import List, Optional, Union, Dict, Any
 
 
 def escape_html(text: str) -> str:
@@ -396,29 +396,58 @@ def format_tool_diff_telegram(tool_name: str, tool_info: dict) -> str:
     return f"⚙️ <b>İşlem:</b> <code>{escape_html(tool_name)}</code>"
 
 
-LOADING_INDICATOR = "⏳ <i>İşlem devam ediyor...</i>"
+def format_active_subagents_indicator(active_subagents: List[str]) -> str:
+    """
+    Format active subagents list into dynamic bottom indicator:
+    ⏳ <i>Aktif Ajanlar: Araştırmacı, Kod Geliştirici...</i>
+    Returns empty string if list is empty.
+    """
+    if not active_subagents:
+        return ""
+    valid_names = [escape_html(name.strip()) for name in active_subagents if isinstance(name, str) and name.strip()]
+    if not valid_names:
+        return ""
+    return f"⏳ <i>Aktif Ajanlar: {', '.join(valid_names)}</i>"
 
 
 def format_cumulative_status_telegram(
     tools: List[dict],
-    active_subagents: Optional[List[dict]] = None,
+    active_subagents: Optional[List[Union[dict, str]]] = None,
     elapsed_seconds: Optional[float] = None,
     current_text: Optional[str] = None
 ) -> str:
     """
     Format all executed and currently running tool stages along with live streaming LLM text into a cumulative progress message.
     Displays:
-    - 🤖 Aktif Ajanlar (Active Subagents, if any)
     - 🔄 Aktif İşlem (Currently running tool, if any)
     - 📋 Tamamlanan Adımlar (Completed steps, if any)
     - Live streamed LLM response accumulated so far (if any)
-    - ⏳ İşlem devam ediyor... (Loading indicator at the bottom)
+    - ⏳ <i>Aktif Ajanlar: Araştırmacı, Kod Geliştirici...</i> (Dynamic active subagent list at bottom, if any active subagents)
     """
-    subs = []
+    subagent_names: List[str] = []
+
+    def _add_name(name: Optional[str]):
+        if name:
+            s = str(name).strip()
+            if s and s not in subagent_names:
+                subagent_names.append(s)
+
     if active_subagents:
         for sa in active_subagents:
-            if isinstance(sa, dict):
-                subs.append(sa)
+            if isinstance(sa, str):
+                _add_name(sa)
+            elif isinstance(sa, dict):
+                st = sa.get("status") or sa.get("state")
+                if st is None or is_running_state(st):
+                    name = (
+                        sa.get("name")
+                        or sa.get("role")
+                        or sa.get("Role")
+                        or sa.get("TypeName")
+                        or sa.get("type")
+                        or "Subagent"
+                    )
+                    _add_name(name)
 
     running_subagent_tools = []
     normal_tools = []
@@ -427,31 +456,24 @@ def format_cumulative_status_telegram(
         t_state = t.get("state", "running")
         if t_name in ("invoke_subagent",) and is_running_state(t_state):
             running_subagent_tools.append(t)
+            t_info = t.get("tool_info", {})
+            args = t_info.get("parameters", t_info) if isinstance(t_info, dict) else {}
+            role = (
+                args.get("Role")
+                or args.get("role")
+                or args.get("name")
+                or args.get("Name")
+                or args.get("TypeName")
+                or args.get("type")
+                or "Subagent"
+            )
+            _add_name(role)
         else:
             normal_tools.append(t)
 
     sections = []
 
-    # Section 1: Active Subagents
-    subagent_lines = []
-    for sa in subs:
-        name = sa.get("name") or sa.get("role") or sa.get("Role") or "Subagent"
-        sa_type = sa.get("type") or sa.get("TypeName") or ""
-        type_str = f" (<code>{escape_html(sa_type)}</code>)" if sa_type else ""
-        subagent_lines.append(f"• ⏳ <b>{escape_html(name)}</b>{type_str} - <i>Çalışıyor...</i>")
-
-    for t in running_subagent_tools:
-        t_info = t.get("tool_info", {})
-        args = t_info.get("parameters", t_info) if isinstance(t_info, dict) else {}
-        role = args.get("Role") or args.get("TypeName") or "Subagent"
-        type_name = args.get("TypeName") if args.get("Role") else ""
-        type_str = f" (<code>{escape_html(type_name)}</code>)" if type_name else ""
-        subagent_lines.append(f"• ⏳ <b>{escape_html(role)}</b>{type_str} - <i>Çalışıyor...</i>")
-
-    if subagent_lines:
-        sections.append("🤖 <b>Aktif Ajanlar:</b>\n" + "\n".join(subagent_lines))
-
-    # Section 2: Active Tools (Running)
+    # Section 1: Active Tools (Running)
     running_tools = [t for t in normal_tools if is_running_state(t.get("state"))]
     if running_tools:
         run_lines = []
@@ -462,7 +484,7 @@ def format_cumulative_status_telegram(
             run_lines.append(f"• {status_line}")
         sections.append("🔄 <b>Aktif İşlem:</b>\n" + "\n".join(run_lines))
 
-    # Section 3: Completed Tools
+    # Section 2: Completed Tools
     completed_tools = [t for t in (tools or []) if is_completed_state(t.get("state"))]
     if completed_tools:
         comp_lines = []
@@ -489,8 +511,13 @@ def format_cumulative_status_telegram(
         if len(text_part) > 2500:
             text_part = text_part[:2450] + "\n..."
 
+    active_subagents_indicator = format_active_subagents_indicator(subagent_names)
+
     if not has_tools_or_subs and not text_part:
-        return f"🧠 <i>Düşünülüyor ve hazırlanıyor...</i>\n\n{LOADING_INDICATOR}"
+        base_text = "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>"
+        if active_subagents_indicator:
+            return f"{base_text}\n\n{active_subagents_indicator}"
+        return base_text
 
     if has_tools_or_subs and text_part:
         full_text = f"{tools_part}\n\n{text_part}"
@@ -507,7 +534,9 @@ def format_cumulative_status_telegram(
         if len(full_text) > 3500:
             full_text = full_text[:3450] + "\n..."
 
-    full_text += f"\n\n{LOADING_INDICATOR}"
+    if active_subagents_indicator:
+        full_text += f"\n\n{active_subagents_indicator}"
+
     return full_text
 
 

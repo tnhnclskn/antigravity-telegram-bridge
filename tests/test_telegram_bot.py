@@ -678,7 +678,6 @@ async def test_telegram_live_updater_rapid_trailing_updates_flushed():
 async def test_handle_incoming_message_live_text_streaming_with_throttling(monkeypatch):
     """Test live text delta streaming updates status_msg with intermediate LLM response."""
     from telegram_bot import handle_incoming_message
-    from formatter import LOADING_INDICATOR
     update = create_mock_update(user_id=1022, username="user22", text="Tell me a joke")
     context = MagicMock()
 
@@ -710,29 +709,29 @@ async def test_handle_incoming_message_live_text_streaming_with_throttling(monke
 
     await handle_incoming_message(update, context)
 
-    # Initial status reply was created
+    # Initial status reply was created without static loading indicator
     assert update.message.reply_text.call_count >= 2
     initial_text = update.message.reply_text.call_args_list[0][0][0]
-    assert LOADING_INDICATOR in initial_text
+    assert "Düşünülüyor" in initial_text
+    assert "İşlem devam ediyor" not in initial_text
 
     # status_msg.edit_text should have been called with the first text delta
     assert status_msg.edit_text.await_count >= 1
     first_edit_text = status_msg.edit_text.call_args_list[0][0][0]
     assert "Why did the developer" in first_edit_text
-    assert LOADING_INDICATOR in first_edit_text
+    assert "İşlem devam ediyor" not in first_edit_text
 
     # When completed (no tools), status_msg is deleted and final clean message is replied
     status_msg.delete.assert_awaited_once()
     final_reply = update.message.reply_text.call_args_list[-1][0][0]
     assert "To get to the other repo!" in final_reply
-    assert LOADING_INDICATOR not in final_reply
+    assert "İşlem devam ediyor" not in final_reply
 
 
 @pytest.mark.asyncio
 async def test_handle_incoming_message_live_streaming_tools_and_text_combined(monkeypatch):
     """Test live streaming updates containing BOTH tool execution steps AND LLM text deltas."""
     from telegram_bot import handle_incoming_message
-    from formatter import LOADING_INDICATOR
     update = create_mock_update(user_id=1023, username="user23", text="Analyze logs")
     context = MagicMock()
 
@@ -785,19 +784,18 @@ async def test_handle_incoming_message_live_streaming_tools_and_text_combined(mo
     # At the end, status_msg has finalized stages summary (no loading indicator)
     final_stage_edit = status_msg.edit_text.call_args_list[-1][0][0]
     assert "İşlem Aşamaları" in final_stage_edit
-    assert LOADING_INDICATOR not in final_stage_edit
+    assert "İşlem devam ediyor" not in final_stage_edit
 
     # Final response is sent via reply_text without loading indicator
     final_reply = update.message.reply_text.call_args_list[-1][0][0]
     assert "All services are running normally." in final_reply
-    assert LOADING_INDICATOR not in final_reply
+    assert "İşlem devam ediyor" not in final_reply
 
 
 @pytest.mark.asyncio
 async def test_handle_incoming_message_live_streaming_tools_and_final_response(monkeypatch):
     """Test full live streaming updates when tools are executed."""
     from telegram_bot import handle_incoming_message
-    from formatter import LOADING_INDICATOR
     update = create_mock_update(user_id=1020, username="user20", text="Find files and summarize")
     context = MagicMock()
 
@@ -834,39 +832,38 @@ async def test_handle_incoming_message_live_streaming_tools_and_final_response(m
 
     await handle_incoming_message(update, context)
 
-    # Initial status reply was created with LOADING_INDICATOR
+    # Initial status reply was created
     assert update.message.reply_text.call_count >= 2
     initial_status_text = update.message.reply_text.call_args_list[0][0][0]
     assert "Düşünülüyor" in initial_status_text
-    assert LOADING_INDICATOR in initial_status_text
+    assert "İşlem devam ediyor" not in initial_status_text
 
     # status_msg.edit_text was called during streaming (live progress & stages summary)
     assert status_msg.edit_text.await_count >= 1
 
-    # Check intermediate live progress edits contained LOADING_INDICATOR
+    # Check intermediate live progress edits did NOT contain static loading indicator
     intermediate_calls = [
         call[0][0] for call in status_msg.edit_text.call_args_list
         if "Aktif İşlem" in call[0][0] or "Tamamlanan Adımlar" in call[0][0]
     ]
     for int_text in intermediate_calls:
-        assert LOADING_INDICATOR in int_text
+        assert "İşlem devam ediyor" not in int_text
 
-    # Check that final stages edit does NOT contain LOADING_INDICATOR
+    # Check that final stages edit does NOT contain loading indicator
     final_stages_text = status_msg.edit_text.call_args_list[-1][0][0]
     assert "İşlem Aşamaları" in final_stages_text
-    assert LOADING_INDICATOR not in final_stages_text
+    assert "İşlem devam ediyor" not in final_stages_text
 
-    # Check that final message reply was sent and does NOT contain LOADING_INDICATOR
+    # Check that final message reply was sent and does NOT contain loading indicator
     final_reply_msg_args = update.message.reply_text.call_args_list[-1][0][0]
     assert "Here are your files" in final_reply_msg_args
-    assert LOADING_INDICATOR not in final_reply_msg_args
+    assert "İşlem devam ediyor" not in final_reply_msg_args
 
 
 @pytest.mark.asyncio
-async def test_handle_incoming_message_intermediate_loading_indicator_lifecycle(monkeypatch):
-    """Test that intermediate status messages contain loading indicator and final response does not."""
+async def test_handle_incoming_message_subagent_lifecycle_streaming(monkeypatch):
+    """Test that active subagents are shown at the bottom during execution and cleaned up after completion."""
     from telegram_bot import handle_incoming_message
-    from formatter import LOADING_INDICATOR
     update = create_mock_update(user_id=1025, username="user25", text="Run analysis")
     context = MagicMock()
 
@@ -876,40 +873,53 @@ async def test_handle_incoming_message_intermediate_loading_indicator_lifecycle(
 
     async def mock_stream(*args, **kwargs):
         yield {"type": "init", "conversation_id": "conv-test-lifecycle"}
+        # 1. Subagent starts running
         yield {
             "type": "step_update",
             "step_type": "tool",
             "state": "running",
-            "tool_name": "grep_search",
-            "tool_info": {"parameters": {"Query": "import os", "SearchPath": "/root"}}
+            "tool_name": "invoke_subagent",
+            "tool_info": {"parameters": {"Role": "Araştırmacı", "TypeName": "research"}}
+        }
+        # 2. Subagent completes
+        yield {
+            "type": "step_update",
+            "step_type": "tool",
+            "state": "completed",
+            "tool_name": "invoke_subagent",
+            "duration_seconds": 1.5,
+            "tool_info": {"parameters": {"Role": "Araştırmacı", "TypeName": "research"}}
         }
         yield {
             "type": "result",
             "conversation_id": "conv-test-lifecycle",
             "response": "Found 5 occurrences.",
-            "duration_seconds": 1.1
+            "duration_seconds": 1.5
         }
 
     monkeypatch.setattr("telegram_bot.agy_client.run_prompt_stream", mock_stream)
 
     await handle_incoming_message(update, context)
 
-    # Initial message has loading indicator
+    # Initial message has no loading indicator
     initial_text = update.message.reply_text.call_args_list[0][0][0]
-    assert LOADING_INDICATOR in initial_text
+    assert "İşlem devam ediyor" not in initial_text
+    assert "Aktif Ajanlar" not in initial_text
 
-    # Intermediate status update has loading indicator
+    # First edit text when subagent was running has dynamic active subagent indicator
     first_edit_text = status_msg.edit_text.call_args_list[0][0][0]
-    assert LOADING_INDICATOR in first_edit_text
-    assert "grep_search" in first_edit_text
+    assert "⏳ <i>Aktif Ajanlar: Araştırmacı</i>" in first_edit_text
+    assert "İşlem devam ediyor" not in first_edit_text
 
-    # Final stages edit has NO loading indicator
+    # Final stages edit has completed stage and NO active agents indicator
     final_stages_edit = status_msg.edit_text.call_args_list[-1][0][0]
-    assert LOADING_INDICATOR not in final_stages_edit
+    assert "İşlem Aşamaları" in final_stages_edit
+    assert "Aktif Ajanlar" not in final_stages_edit
+    assert "İşlem devam ediyor" not in final_stages_edit
 
     # Final response reply has NO loading indicator
     final_reply = update.message.reply_text.call_args_list[-1][0][0]
-    assert LOADING_INDICATOR not in final_reply
+    assert "İşlem devam ediyor" not in final_reply
     assert "Found 5 occurrences." in final_reply
 
 

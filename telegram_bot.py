@@ -1130,6 +1130,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
         accumulated_response = ""
         final_result_data = None
         executed_tools: List[Dict[str, Any]] = []
+        active_subagents_list: Optional[List[Any]] = None
 
         try:
             # 5. Stream response from Antigravity CLI
@@ -1158,6 +1159,10 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
                     duration = event.get("duration_seconds")
                     text_delta = event.get("text_delta", "")
                     accum_from_event = event.get("accumulated_text")
+                    sa_from_event = event.get("active_subagents") or event.get("subagents")
+
+                    if sa_from_event is not None:
+                        active_subagents_list = sa_from_event if isinstance(sa_from_event, list) else [sa_from_event]
 
                     if accum_from_event:
                         accumulated_response = accum_from_event
@@ -1195,6 +1200,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
 
                     current_status = format_cumulative_status_telegram(
                         tools=executed_tools,
+                        active_subagents=active_subagents_list,
                         current_text=accumulated_response
                     )
                     await live_updater.update(current_status)

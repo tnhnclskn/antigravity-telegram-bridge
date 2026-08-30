@@ -266,3 +266,138 @@ async def test_prompt_stream_with_active_subagents_event(monkeypatch):
     assert events[1]["type"] == "step_update"
     assert events[1]["active_subagents"] == [{"name": "Araştırmacı", "status": "running"}]
 
+
+@pytest.mark.asyncio
+async def test_get_official_quotas_structured(monkeypatch):
+    client = AgyClient(bin_path="agy")
+
+    sample_output = {
+        "conversation_id": "",
+        "status": "SUCCESS",
+        "response": "Gemini Models\tWeekly Limit Remaining\t50%\t2026-09-02T09:13:21Z\n",
+        "command": {
+            "name": "usage",
+            "data": {
+                "description": "Within each group, models share a weekly limit and a 5-hour limit.",
+                "groups": [
+                    {
+                        "name": "Gemini Models",
+                        "description": "Models: Gemini Flash, Gemini Pro",
+                        "buckets": [
+                            {
+                                "id": "gemini-weekly",
+                                "name": "Weekly Limit Remaining",
+                                "description": "Weekly refresh in 2 days",
+                                "window": "weekly",
+                                "remaining_fraction": 0.49777,
+                                "reset_time": "2026-09-02T09:13:21Z"
+                            },
+                            {
+                                "id": "gemini-5h",
+                                "name": "Five Hour Limit Remaining",
+                                "description": "5-hour refresh in 1 hour",
+                                "window": "5h",
+                                "remaining_fraction": 0.61812,
+                                "reset_time": "2026-08-30T16:49:12Z"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "Claude and GPT models",
+                        "description": "Models: Claude, GPT",
+                        "buckets": [
+                            {
+                                "id": "3p-weekly",
+                                "name": "Weekly Limit Remaining",
+                                "window": "weekly",
+                                "remaining_fraction": 0.268,
+                                "reset_time": "2026-08-31T11:41:54Z"
+                            },
+                            {
+                                "id": "3p-5h",
+                                "name": "Five Hour Limit Remaining",
+                                "window": "5h",
+                                "remaining_fraction": 1.0,
+                                "reset_time": "2026-08-30T20:43:53Z"
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return json.dumps(sample_output).encode(), b""
+
+    async def fake_create(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+
+    res = await client.get_official_quotas()
+    assert res["success"] is True
+    assert len(res["groups"]) == 2
+    assert res["groups"][0]["name"] == "Gemini Models"
+    assert len(res["groups"][0]["buckets"]) == 2
+    assert res["groups"][0]["buckets"][0]["window"] == "weekly"
+    assert res["groups"][0]["buckets"][0]["remaining_percent"] == 49.8
+    assert res["groups"][0]["buckets"][1]["window"] == "5h"
+    assert res["groups"][0]["buckets"][1]["remaining_percent"] == 61.8
+    assert res["groups"][1]["name"] == "Claude and GPT models"
+    assert res["groups"][1]["buckets"][1]["remaining_percent"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_get_official_quotas_fallback_tsv(monkeypatch):
+    client = AgyClient(bin_path="agy")
+
+    sample_output = {
+        "status": "SUCCESS",
+        "response": (
+            "Gemini Models\tWeekly Limit Remaining\t50%\t2026-09-02T09:13:21Z\n"
+            "Gemini Models\tFive Hour Limit Remaining\t62%\t2026-08-30T16:49:12Z\n"
+            "Claude and GPT models\tWeekly Limit Remaining\t27%\t2026-08-31T11:41:54Z\n"
+            "Claude and GPT models\tFive Hour Limit Remaining\t100%\t2026-08-30T20:43:53Z\n"
+        )
+    }
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return json.dumps(sample_output).encode(), b""
+
+    async def fake_create(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+
+    res = await client.get_official_quotas()
+    assert res["success"] is True
+    assert len(res["groups"]) == 2
+    gemini_group = next(g for g in res["groups"] if g["name"] == "Gemini Models")
+    assert len(gemini_group["buckets"]) == 2
+    assert gemini_group["buckets"][0]["window"] == "weekly"
+    assert gemini_group["buckets"][0]["remaining_percent"] == 50.0
+    assert gemini_group["buckets"][1]["window"] == "5h"
+    assert gemini_group["buckets"][1]["remaining_percent"] == 62.0
+
+
+@pytest.mark.asyncio
+async def test_get_official_quotas_error_handling(monkeypatch):
+    client = AgyClient(bin_path="agy")
+
+    async def fake_create(*args, **kwargs):
+        raise RuntimeError("Subprocess exec failed")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+
+    res = await client.get_official_quotas()
+    assert res["success"] is False
+    assert res["groups"] == []
+    assert "Subprocess exec failed" in res["error"]
+

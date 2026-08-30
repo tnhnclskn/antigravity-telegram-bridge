@@ -619,3 +619,22 @@ def render_progress_bar(
 
     return f"[{bar}] %{percent:.1f} {vals_str}"
 
+
+def render_percentage_bar(
+    percent: Union[int, float],
+    width: int = 10
+) -> str:
+    """
+    Render a visual progress bar for a percentage value (0.0 to 100.0).
+
+    Example:
+        render_percentage_bar(62.0, width=10)
+        -> "[██████░░░░] %62"
+    """
+    p = max(0.0, min(100.0, float(percent)))
+    ratio = p / 100.0
+    filled_count = int(round(ratio * width))
+    empty_count = max(0, width - filled_count)
+    bar = "█" * filled_count + "░" * empty_count
+    return f"[{bar}] %{int(round(p))}"
+

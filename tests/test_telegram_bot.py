@@ -258,7 +258,7 @@ async def test_update_command_with_changes(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_usage_command(monkeypatch):
-    """Test /usage command returns formatted Antigravity and Codex statistics."""
+    """Test /usage command returns formatted Antigravity, Codex, and official API quota statistics."""
     update = create_mock_update(user_id=1005, username="user5", text="/usage")
     context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
 
@@ -277,7 +277,60 @@ async def test_usage_command(monkeypatch):
             "threads_count": 0
         }
 
+    # Mock official agy quotas
+    async def mock_get_official_quotas():
+        return {
+            "success": True,
+            "groups": [
+                {
+                    "name": "Gemini Models",
+                    "description": "Gemini Flash, Pro",
+                    "buckets": [
+                        {
+                            "id": "gemini-weekly",
+                            "name": "Weekly Limit Remaining",
+                            "window": "weekly",
+                            "remaining_fraction": 0.498,
+                            "remaining_percent": 49.8,
+                            "reset_time": "2026-09-02T09:13:21Z"
+                        },
+                        {
+                            "id": "gemini-5h",
+                            "name": "Five Hour Limit Remaining",
+                            "window": "5h",
+                            "remaining_fraction": 0.618,
+                            "remaining_percent": 61.8,
+                            "reset_time": "2026-08-30T16:49:12Z"
+                        }
+                    ]
+                },
+                {
+                    "name": "Claude and GPT models",
+                    "description": "Claude, GPT",
+                    "buckets": [
+                        {
+                            "id": "3p-weekly",
+                            "name": "Weekly Limit Remaining",
+                            "window": "weekly",
+                            "remaining_fraction": 0.268,
+                            "remaining_percent": 26.8,
+                            "reset_time": "2026-08-31T11:41:54Z"
+                        },
+                        {
+                            "id": "3p-5h",
+                            "name": "Five Hour Limit Remaining",
+                            "window": "5h",
+                            "remaining_fraction": 1.0,
+                            "remaining_percent": 100.0,
+                            "reset_time": "2026-08-30T20:43:53Z"
+                        }
+                    ]
+                }
+            ]
+        }
+
     monkeypatch.setattr(telegram_bot, "get_codex_stats", mock_codex_stats)
+    monkeypatch.setattr(telegram_bot.agy_client, "get_official_quotas", mock_get_official_quotas)
 
     await usage_command(update, context)
     update.message.reply_text.assert_awaited_once()
@@ -293,6 +346,16 @@ async def test_usage_command(monkeypatch):
     assert "1.5 MB" in usage_text
     assert "1024 MB" in usage_text
     assert "10.0M" in usage_text
+    # Check official quotas section
+    assert "Resmi API Kotaları (Kalan Limit):" in usage_text
+    assert "Gemini (5 Saatlik):" in usage_text
+    assert "Gemini (Haftalık):" in usage_text
+    assert "Claude &amp; GPT (5 Saatlik):" in usage_text
+    assert "Claude &amp; GPT (Haftalık):" in usage_text
+    assert "[██████░░░░] %62" in usage_text
+    assert "[█████░░░░░] %50" in usage_text
+    assert "[██████████] %100" in usage_text
+    assert "[███░░░░░░░] %27" in usage_text
 
 
 @pytest.mark.asyncio
@@ -311,7 +374,11 @@ async def test_usage_command_codex_not_exists(monkeypatch):
             "threads_count": 0
         }
 
+    async def mock_get_official_quotas():
+        return {"success": False, "groups": []}
+
     monkeypatch.setattr(telegram_bot, "get_codex_stats", mock_codex_stats)
+    monkeypatch.setattr(telegram_bot.agy_client, "get_official_quotas", mock_get_official_quotas)
 
     await usage_command(update, context)
     update.message.reply_text.assert_awaited_once()
@@ -320,6 +387,24 @@ async def test_usage_command_codex_not_exists(monkeypatch):
     assert "Aylık Token Kotası:" in usage_text
     assert "Codex Disk Kotası:" in usage_text
     assert "bulunamadı" in usage_text
+
+
+@pytest.mark.asyncio
+async def test_usage_command_quotas_exception(monkeypatch):
+    """Test /usage command when get_official_quotas raises exception."""
+    update = create_mock_update(user_id=1008, username="user8", text="/usage")
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+
+    async def mock_get_official_quotas():
+        raise RuntimeError("CLI failed")
+
+    monkeypatch.setattr(telegram_bot.agy_client, "get_official_quotas", mock_get_official_quotas)
+
+    await usage_command(update, context)
+    update.message.reply_text.assert_awaited_once()
+    usage_text = update.message.reply_text.call_args[0][0]
+    assert "Antigravity & Codex Kullanım İstatistikleri" in usage_text
+
 
 
 @pytest.mark.asyncio

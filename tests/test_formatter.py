@@ -12,6 +12,7 @@ from formatter import (
     format_stats_footer,
     format_active_subagents_indicator,
     render_progress_bar,
+    render_percentage_bar,
 )
 
 
@@ -512,6 +513,18 @@ def test_render_progress_bar_custom_units_and_widths():
 
     res_custom = render_progress_bar(10, 20, width=5, unit="items")
     assert res_custom == "[██░░░] %50.0 (10 items / 20 items)"
+
+
+def test_render_percentage_bar():
+    assert render_percentage_bar(0) == "[░░░░░░░░░░] %0"
+    assert render_percentage_bar(100) == "[██████████] %100"
+    assert render_percentage_bar(50) == "[█████░░░░░] %50"
+    assert render_percentage_bar(45) == "[████░░░░░░] %45"
+    assert render_percentage_bar(61.8) == "[██████░░░░] %62"
+    assert render_percentage_bar(26.8) == "[███░░░░░░░] %27"
+    assert render_percentage_bar(-10) == "[░░░░░░░░░░] %0"
+    assert render_percentage_bar(150) == "[██████████] %100"
+    assert render_percentage_bar(40, width=5) == "[██░░░] %40"
 
 
 

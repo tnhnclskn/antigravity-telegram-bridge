@@ -288,6 +288,116 @@ class AgyClient:
             logger.error(f"Failed to fetch models: {e}")
             return ["gemini-3.7-flash", "gemini-3.1-pro", "claude-sonnet-4-6"]
 
+    async def get_official_quotas(self) -> Dict[str, Any]:
+        """
+        Fetch official API quotas (5-hour and weekly limits) via `agy --output-format json -p "/usage"`.
+        Returns structured quota data including groups, buckets, and remaining percentages.
+        """
+        cmd = [
+            self.bin_path,
+            "--output-format", "json",
+            "-p", "/usage"
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=os.environ.copy()
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15.0)
+            raw_output = stdout.decode("utf-8", errors="replace").strip()
+            if not raw_output:
+                err_msg = stderr.decode("utf-8", errors="replace").strip()
+                logger.warning(f"Empty output from agy usage command: {err_msg}")
+                return {"success": False, "groups": [], "error": err_msg or "Empty output"}
+
+            data = json.loads(raw_output)
+            groups = []
+
+            # 1. Structured format from command.data.groups
+            command_data = data.get("command", {}).get("data", {}) if isinstance(data, dict) else {}
+            raw_groups = command_data.get("groups") if isinstance(command_data, dict) else None
+
+            if raw_groups and isinstance(raw_groups, list):
+                for g in raw_groups:
+                    group_name = g.get("name", "")
+                    group_desc = g.get("description", "")
+                    buckets = []
+                    for b in g.get("buckets", []):
+                        rem_frac = b.get("remaining_fraction")
+                        if rem_frac is not None:
+                            rem_pct = round(float(rem_frac) * 100.0, 1)
+                        else:
+                            rem_pct = 100.0
+                        buckets.append({
+                            "id": b.get("id", ""),
+                            "name": b.get("name", ""),
+                            "description": b.get("description", ""),
+                            "window": b.get("window", ""),
+                            "remaining_fraction": float(rem_frac) if rem_frac is not None else 1.0,
+                            "remaining_percent": rem_pct,
+                            "reset_time": b.get("reset_time", "")
+                        })
+                    groups.append({
+                        "name": group_name,
+                        "description": group_desc,
+                        "buckets": buckets
+                    })
+
+            # 2. Fallback: Parse TSV formatted response if structured groups missing
+            if not groups and isinstance(data, dict):
+                raw_response = data.get("response") or data.get("result", {}).get("response", "")
+                if raw_response and isinstance(raw_response, str):
+                    groups_dict: Dict[str, Dict[str, Any]] = {}
+                    for line in raw_response.splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        parts = line.split("\t")
+                        if len(parts) >= 3:
+                            g_name = parts[0].strip()
+                            b_name = parts[1].strip()
+                            pct_str = parts[2].strip().replace("%", "")
+                            reset_t = parts[3].strip() if len(parts) >= 4 else ""
+                            try:
+                                rem_pct = float(pct_str)
+                            except ValueError:
+                                rem_pct = 100.0
+                            rem_frac = rem_pct / 100.0
+                            window = "5h" if ("5" in b_name or "five" in b_name.lower()) else "weekly"
+
+                            if g_name not in groups_dict:
+                                groups_dict[g_name] = {
+                                    "name": g_name,
+                                    "description": "",
+                                    "buckets": []
+                                }
+                            groups_dict[g_name]["buckets"].append({
+                                "id": f"{g_name.lower()}-{window}",
+                                "name": b_name,
+                                "description": "",
+                                "window": window,
+                                "remaining_fraction": rem_frac,
+                                "remaining_percent": rem_pct,
+                                "reset_time": reset_t
+                            })
+                    groups = list(groups_dict.values())
+
+            return {
+                "success": True,
+                "groups": groups,
+                "raw_response": data.get("response", "") if isinstance(data, dict) else ""
+            }
+        except Exception as e:
+            logger.error(f"Failed to fetch official quotas from agy: {e}")
+            return {
+                "success": False,
+                "groups": [],
+                "error": str(e)
+            }
+
+
     @staticmethod
     def get_system_stats() -> Dict[str, Any]:
         """Fetch system statistics (CPU, RAM, Disk)."""

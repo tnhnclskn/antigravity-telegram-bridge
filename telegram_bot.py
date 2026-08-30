@@ -44,6 +44,7 @@ from formatter import (
     format_execution_stages_telegram,
     format_stats_footer,
     render_progress_bar,
+    render_percentage_bar,
     escape_html
 )
 
@@ -409,6 +410,41 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         lines.append(f"• <i>Codex dizini ({escape_html(codex_stats['path'])}) bulunamadı.</i>")
         lines.append(f"• <b>Codex Disk Kotası:</b> <code>{disk_bar}</code>")
+
+    # Fetch official agy API quotas (5-hour and weekly limits)
+    try:
+        quotas = await agy_client.get_official_quotas()
+        if quotas and quotas.get("groups"):
+            lines.append("")
+            lines.append("⚡ <b>Resmi API Kotaları (Kalan Limit):</b>")
+            for group in quotas["groups"]:
+                group_name = group.get("name", "Model Grubu")
+                short_group = group_name.replace(" Models", "").replace(" models", "").replace(" and ", " & ")
+
+                # Sort buckets so 5-hour limit comes first, then weekly limit
+                buckets = sorted(
+                    group.get("buckets", []),
+                    key=lambda b: 0 if (b.get("window") == "5h" or "5" in b.get("name", "")) else 1
+                )
+                for bucket in buckets:
+                    b_name = bucket.get("name", "")
+                    window = bucket.get("window", "")
+                    if window == "5h" or "5" in b_name or "five" in b_name.lower():
+                        window_label = "5 Saatlik"
+                    elif window == "weekly" or "week" in b_name.lower() or "hafta" in b_name.lower():
+                        window_label = "Haftalık"
+                    else:
+                        window_label = b_name or "Kota"
+
+                    rem_pct = bucket.get("remaining_percent")
+                    if rem_pct is None and "remaining_fraction" in bucket:
+                        rem_pct = bucket["remaining_fraction"] * 100.0
+                    rem_pct = rem_pct if rem_pct is not None else 0.0
+
+                    bar = render_percentage_bar(rem_pct, width=10)
+                    lines.append(f"• <b>{escape_html(short_group)} ({window_label}):</b> <code>{bar}</code>")
+    except Exception as e:
+        logger.warning(f"Error fetching official quotas in usage_command: {e}")
 
     reply_text = "\n".join(lines)
 

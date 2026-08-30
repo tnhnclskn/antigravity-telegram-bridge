@@ -476,6 +476,9 @@ async def test_build_application():
             assert "newchat" in registered_cmds
             assert "update" in registered_cmds
             assert "restart" in registered_cmds
+            assert "reboot" in registered_cmds
+            assert "reload" in registered_cmds
+            assert "yenidenbaslat" in registered_cmds
             assert "usage" in registered_cmds
             assert "model" in registered_cmds
             assert "effort" in registered_cmds
@@ -805,7 +808,10 @@ async def test_restart_confirm_callback(monkeypatch):
     assert data["chat_id"] == 1031
     assert "timestamp" in data
 
-    mock_os_system.assert_called_once_with("sleep 1 && systemctl --user restart antigravity-hub.service &")
+    assert mock_os_system.call_count == 1
+    executed_cmd = mock_os_system.call_args[0][0]
+    assert "antigravity-hub.service" in executed_cmd
+    assert "sleep 1" in executed_cmd
 
 
 @pytest.mark.asyncio
@@ -902,6 +908,104 @@ async def test_restart_command_callback_query(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_restart_confirm_callback_edit_fails_gracefully(monkeypatch):
+    """Test that restart proceeds even if edit_message_text raises an error."""
+    update = MagicMock(spec=Update)
+    user = MagicMock(spec=User)
+    user.id = 1034
+    user.username = "user34"
+
+    chat = MagicMock(spec=Chat)
+    chat.id = 1034
+
+    query = AsyncMock(spec=CallbackQuery)
+    query.from_user = user
+    query.data = "restart_confirm"
+    query.answer = AsyncMock()
+    query.edit_message_text = AsyncMock(side_effect=Exception("Telegram Network Error"))
+    query.message = AsyncMock()
+    query.message.chat_id = 1034
+
+    update.effective_user = user
+    update.effective_chat = chat
+    update.message = None
+    update.callback_query = query
+
+    await telegram_bot.db.add_whitelisted_user(1034, username="user34", role="admin")
+
+    mock_os_system = MagicMock()
+    monkeypatch.setattr("telegram_bot.os.system", mock_os_system)
+
+    await callback_handler(update, MagicMock())
+
+    assert mock_os_system.call_count == 1
+    assert settings.PENDING_RESTART_FILE.exists()
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_message_plain_text_restart_shortcut(monkeypatch):
+    """Test that sending 'restart' as plain text message triggers restart_command instead of AI stream."""
+    from telegram_bot import handle_incoming_message
+    update = create_mock_update(user_id=1035, username="user35", text="restart")
+    update.message.photo = None
+    update.message.document = None
+    update.message.voice = None
+    update.message.audio = None
+    update.message.caption = None
+    context = MagicMock()
+
+    mock_restart_command = AsyncMock()
+    monkeypatch.setattr("telegram_bot.restart_command", mock_restart_command)
+    mock_run_prompt_stream = AsyncMock()
+    monkeypatch.setattr("telegram_bot.agy_client.run_prompt_stream", mock_run_prompt_stream)
+
+    await handle_incoming_message(update, context)
+
+    mock_restart_command.assert_awaited_once_with(update, context)
+    mock_run_prompt_stream.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_message_plain_text_status_shortcut(monkeypatch):
+    """Test that sending 'status' or 'durum' as plain text triggers status_command."""
+    from telegram_bot import handle_incoming_message
+    update = create_mock_update(user_id=1036, username="user36", text="durum")
+    update.message.photo = None
+    update.message.document = None
+    update.message.voice = None
+    update.message.audio = None
+    update.message.caption = None
+    context = MagicMock()
+
+    mock_status_command = AsyncMock()
+    monkeypatch.setattr("telegram_bot.status_command", mock_status_command)
+
+    await handle_incoming_message(update, context)
+
+    mock_status_command.assert_awaited_once_with(update, context)
+
+
+@pytest.mark.asyncio
+async def test_start_and_status_keyboards_have_restart_button():
+    """Test that start and status interactive keyboards provide quick restart button."""
+    update = create_mock_update(user_id=1037, username="user37", text="/start")
+    context = MagicMock()
+
+    await start_command(update, context)
+    update.message.reply_text.assert_awaited_once()
+    reply_markup = update.message.reply_text.call_args[1].get("reply_markup")
+    callbacks = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+    assert "cmd_restart" in callbacks
+
+    update_status = create_mock_update(user_id=1037, username="user37", text="/status")
+    await status_command(update_status, context)
+    update_status.message.reply_text.assert_awaited_once()
+    status_markup = update_status.message.reply_text.call_args[1].get("reply_markup")
+    status_callbacks = [btn.callback_data for row in status_markup.inline_keyboard for btn in row]
+    assert "cmd_restart" in status_callbacks
+
+
+@pytest.mark.asyncio
 async def test_restart_command_unauthorized(monkeypatch):
     """Test /restart command is rejected for unauthorized users."""
     await telegram_bot.db.add_whitelisted_user(9999, "admin")
@@ -918,6 +1022,7 @@ async def test_restart_command_unauthorized(monkeypatch):
     sent_text = update.message.reply_text.call_args[0][0]
     assert "Yetkisiz Erişim" in sent_text
     mock_os_system.assert_not_called()
+
 
 
 

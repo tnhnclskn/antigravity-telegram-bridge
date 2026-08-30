@@ -202,6 +202,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("🔄 Güncelle", callback_data="cmd_update"),
+            InlineKeyboardButton("⚡ Yeniden Başlat", callback_data="cmd_restart"),
         ],
         [
             InlineKeyboardButton("📖 Yardım & Komutlar", callback_data="cmd_help")
@@ -423,6 +424,9 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [
             InlineKeyboardButton("🔄 Sıfırla", callback_data="cmd_new"),
             InlineKeyboardButton("🧠 Model Değiştir", callback_data="cmd_models"),
+        ],
+        [
+            InlineKeyboardButton("⚡ Yeniden Başlat", callback_data="cmd_restart"),
         ]
     ]
 
@@ -813,11 +817,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Failed to save pending restart file: {e}")
 
-        await query.edit_message_text(
-            "🔄 <b>Köprü servisi yeniden başlatılıyor...</b>",
-            parse_mode=ParseMode.HTML
-        )
-        os.system("sleep 1 && systemctl --user restart antigravity-hub.service &")
+        try:
+            await query.edit_message_text(
+                "🔄 <b>Köprü servisi yeniden başlatılıyor...</b>",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as edit_err:
+            logger.warning(f"Failed to edit message for restart confirmation: {edit_err}")
+
+        uid = os.getuid() if hasattr(os, "getuid") else 0
+        xdg_env = f"export XDG_RUNTIME_DIR=/run/user/{uid}; " if os.path.exists(f"/run/user/{uid}") else ""
+        restart_cmd = f"sleep 1 && {xdg_env}(systemctl --user restart antigravity-hub.service || systemctl --user restart antigravity-telegram.service || systemctl restart antigravity-hub.service) &"
+        os.system(restart_cmd)
     elif data == "restart_cancel":
         await query.edit_message_text(
             "❌ <b>Yeniden başlatma iptal edildi.</b>",
@@ -965,7 +976,32 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
     chat_id = message.chat_id
     user_id = user.id
 
-    # 1. Implement User Queue with Lock
+    # 1. Check for direct plain text command shortcuts before acquiring user lock
+    if message.text and not (message.photo or message.document or message.voice or message.audio):
+        raw_cmd = message.text.strip().lower()
+        if raw_cmd in ("restart", "reboot", "reload", "yeniden başlat", "yeniden baslat", "/restart", "/reboot", "/reload"):
+            await restart_command(update, context)
+            return
+        elif raw_cmd in ("status", "durum", "/status", "/durum"):
+            await status_command(update, context)
+            return
+        elif raw_cmd in ("help", "yardim", "yardım", "/help", "/yardim", "/yardım"):
+            await help_command(update, context)
+            return
+        elif raw_cmd in ("projects", "project", "projeler", "proje", "/projects", "/project"):
+            await projects_command(update, context)
+            return
+        elif raw_cmd in ("update", "guncelle", "güncelle", "/update", "/guncelle", "/güncelle"):
+            await update_command(update, context)
+            return
+        elif raw_cmd in ("reset", "clear", "new", "yeni", "newchat", "/reset", "/clear", "/new", "/newchat"):
+            await new_session_command(update, context)
+            return
+        elif raw_cmd in ("usage", "istatistik", "stats", "/usage", "/istatistik", "/stats"):
+            await usage_command(update, context)
+            return
+
+    # 2. Implement User Queue with Lock
     user_lock = USER_LOCKS.setdefault(user_id, asyncio.Lock())
     if user_lock.locked():
         await message.reply_text(
@@ -975,7 +1011,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
     
     async with user_lock:
 
-        # 2. Extract prompt and handle attachments
+        # 3. Extract prompt and handle attachments
         prompt_text = message.text or message.caption or ""
         attachment_paths = []
         ts = int(time.time())
@@ -1219,22 +1255,22 @@ def build_application() -> Application:
     )
 
     # Command handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler(["projects", "project"], projects_command))
-    application.add_handler(CommandHandler(["newchat", "new", "reset", "clear"], new_session_command))
-    application.add_handler(CommandHandler(["cancel", "stop"], cancel_command))
-    application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(CommandHandler("update", update_command))
-    application.add_handler(CommandHandler("restart", restart_command))
-    application.add_handler(CommandHandler("usage", usage_command))
-    application.add_handler(CommandHandler("model", model_command))
-    application.add_handler(CommandHandler("effort", effort_command))
-    application.add_handler(CommandHandler(["workspace", "cwd", "dir"], workspace_command))
-    application.add_handler(CommandHandler(["permissions", "permission", "auto"], permissions_command))
-    application.add_handler(CommandHandler("history", history_command))
-    application.add_handler(CommandHandler("daily", daily_command))
-    application.add_handler(CommandHandler("whitelist", whitelist_command))
+    application.add_handler(CommandHandler(["start", "basla"], start_command))
+    application.add_handler(CommandHandler(["help", "yardim"], help_command))
+    application.add_handler(CommandHandler(["projects", "project", "projeler", "proje"], projects_command))
+    application.add_handler(CommandHandler(["newchat", "new", "reset", "clear", "yeni", "sifirla"], new_session_command))
+    application.add_handler(CommandHandler(["cancel", "stop", "dur", "iptal"], cancel_command))
+    application.add_handler(CommandHandler(["status", "durum"], status_command))
+    application.add_handler(CommandHandler(["update", "guncelle"], update_command))
+    application.add_handler(CommandHandler(["restart", "reboot", "reload", "yenidenbaslat"], restart_command))
+    application.add_handler(CommandHandler(["usage", "istatistik", "stats"], usage_command))
+    application.add_handler(CommandHandler(["model", "models"], model_command))
+    application.add_handler(CommandHandler(["effort", "efor"], effort_command))
+    application.add_handler(CommandHandler(["workspace", "cwd", "dir", "dizin"], workspace_command))
+    application.add_handler(CommandHandler(["permissions", "permission", "auto", "izin", "izinler"], permissions_command))
+    application.add_handler(CommandHandler(["history", "gecmis"], history_command))
+    application.add_handler(CommandHandler(["daily", "gunluk"], daily_command))
+    application.add_handler(CommandHandler(["whitelist", "izinli"], whitelist_command))
 
     # Interactive UI callbacks
     application.add_handler(CallbackQueryHandler(callback_handler))

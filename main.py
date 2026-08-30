@@ -69,8 +69,8 @@ async def main():
             from telegram_bot import build_application
             tg_app = build_application()
             await tg_app.initialize()
-            if tg_app.post_init:
-                await tg_app.post_init(tg_app)
+            from telegram_bot import post_init
+            await post_init(tg_app)
             await tg_app.start()
 
             bot_info = await tg_app.bot.get_me()

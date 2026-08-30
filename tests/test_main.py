@@ -38,6 +38,9 @@ async def test_main_telegram_startup_executes_post_init(monkeypatch):
     mock_tg_app.stop = AsyncMock()
     mock_tg_app.shutdown = AsyncMock()
 
+    mock_post_init = AsyncMock(side_effect=lambda app: call_order.append("post_init"))
+    monkeypatch.setattr("telegram_bot.post_init", mock_post_init)
+
     mock_build_app = MagicMock(return_value=mock_tg_app)
     monkeypatch.setattr("telegram_bot.build_application", mock_build_app)
 
@@ -53,12 +56,12 @@ async def test_main_telegram_startup_executes_post_init(monkeypatch):
         pass
 
     assert "tg_app.initialize" in call_order
-    assert "tg_app.post_init" in call_order
+    assert "post_init" in call_order
     assert "tg_app.start" in call_order
 
     init_idx = call_order.index("tg_app.initialize")
-    post_init_idx = call_order.index("tg_app.post_init")
+    post_init_idx = call_order.index("post_init")
     start_idx = call_order.index("tg_app.start")
 
     assert init_idx < post_init_idx < start_idx
-    mock_tg_app.post_init.assert_awaited_once_with(mock_tg_app)
+    mock_post_init.assert_awaited_once_with(mock_tg_app)

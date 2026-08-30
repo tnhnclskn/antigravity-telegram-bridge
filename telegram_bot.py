@@ -309,30 +309,63 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await status_msg.edit_text(reply_text, parse_mode=ParseMode.HTML)
 
 
+def trigger_service_restart(chat_id: Optional[int] = None):
+    """Save pending restart notification and trigger background service restart."""
+    if chat_id:
+        try:
+            settings.PENDING_RESTART_FILE.parent.mkdir(parents=True, exist_ok=True)
+            restart_data = {
+                "chat_id": chat_id,
+                "timestamp": time.time(),
+            }
+            settings.PENDING_RESTART_FILE.write_text(json.dumps(restart_data), encoding="utf-8")
+            logger.info(f"Saved pending restart notification info for chat_id={chat_id}")
+        except Exception as e:
+            logger.error(f"Failed to save pending restart file: {e}")
+
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    xdg_env = f"export XDG_RUNTIME_DIR=/run/user/{uid}; " if os.path.exists(f"/run/user/{uid}") else ""
+    restart_cmd = f"sleep 1 && {xdg_env}(systemctl --user restart antigravity-hub.service || systemctl --user restart antigravity-telegram.service || systemctl restart antigravity-hub.service) &"
+    os.system(restart_cmd)
+
+
 @authorized_only
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Prompt confirmation before restarting the antigravity-hub service."""
+    """Prompt confirmation if active tasks exist, or directly restart if 0 active tasks."""
     active_count = agy_client.get_active_count()
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("⚠️ Evet, Zorla Yeniden Başlat", callback_data="restart_confirm"),
-            InlineKeyboardButton("❌ İptal", callback_data="restart_cancel")
-        ]
-    ])
-
-    msg_text = (
-        f"⚠️ <b>Yeniden Başlatma Onayı</b>\n\n"
-        f"Şu anda {active_count} aktif işlem devam ediyor. "
-        f"Botu yeniden başlatmak tüm işlemleri kesecektir. Emin misiniz?"
-    )
-
     target_msg = update.message or (update.callback_query.message if update.callback_query else None)
+
+    if active_count > 0:
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚠️ Evet, Zorla Yeniden Başlat", callback_data="restart_confirm"),
+                InlineKeyboardButton("❌ İptal", callback_data="restart_cancel")
+            ]
+        ])
+
+        msg_text = (
+            f"⚠️ <b>Yeniden Başlatma Onayı</b>\n\n"
+            f"Şu anda {active_count} aktif işlem devam ediyor. "
+            f"Botu yeniden başlatmak tüm işlemleri kesecektir. Emin misiniz?"
+        )
+
+        if target_msg:
+            await target_msg.reply_text(
+                msg_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard
+            )
+        return
+
+    # active_count == 0: Direct restart without confirmation buttons
     if target_msg:
         await target_msg.reply_text(
-            msg_text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=keyboard
+            "🔄 <b>Köprü servisi yeniden başlatılıyor...</b>",
+            parse_mode=ParseMode.HTML
         )
+
+    chat_id = target_msg.chat_id if target_msg else (update.effective_user.id if update.effective_user else None)
+    trigger_service_restart(chat_id)
 
 
 @authorized_only
@@ -805,18 +838,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await restart_command(update, context)
     elif data == "restart_confirm":
         chat_id = query.message.chat_id if query.message else user_id
-        if chat_id:
-            try:
-                settings.PENDING_RESTART_FILE.parent.mkdir(parents=True, exist_ok=True)
-                restart_data = {
-                    "chat_id": chat_id,
-                    "timestamp": time.time(),
-                }
-                settings.PENDING_RESTART_FILE.write_text(json.dumps(restart_data), encoding="utf-8")
-                logger.info(f"Saved pending restart notification info for chat_id={chat_id}")
-            except Exception as e:
-                logger.error(f"Failed to save pending restart file: {e}")
-
         try:
             await query.edit_message_text(
                 "🔄 <b>Köprü servisi yeniden başlatılıyor...</b>",
@@ -825,10 +846,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as edit_err:
             logger.warning(f"Failed to edit message for restart confirmation: {edit_err}")
 
-        uid = os.getuid() if hasattr(os, "getuid") else 0
-        xdg_env = f"export XDG_RUNTIME_DIR=/run/user/{uid}; " if os.path.exists(f"/run/user/{uid}") else ""
-        restart_cmd = f"sleep 1 && {xdg_env}(systemctl --user restart antigravity-hub.service || systemctl --user restart antigravity-telegram.service || systemctl restart antigravity-hub.service) &"
-        os.system(restart_cmd)
+        trigger_service_restart(chat_id)
     elif data == "restart_cancel":
         await query.edit_message_text(
             "❌ <b>Yeniden başlatma iptal edildi.</b>",

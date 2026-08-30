@@ -3,6 +3,7 @@ venv/
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/pending_restart.json
 data/attachments/*
 !data/attachments/.gitkeep
 __pycache__/

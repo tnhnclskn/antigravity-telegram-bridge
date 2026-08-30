@@ -43,6 +43,7 @@ from formatter import (
     format_cumulative_status_telegram,
     format_execution_stages_telegram,
     format_stats_footer,
+    render_progress_bar,
     escape_html
 )
 
@@ -374,6 +375,15 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats = await db.get_usage_stats()
     codex_stats = get_codex_stats()
 
+    # Calculate quota progress bars
+    token_used = stats.get("total_tokens_est", 0)
+    token_quota = getattr(settings, "MONTHLY_TOKEN_QUOTA", 10_000_000)
+    token_bar = render_progress_bar(token_used, token_quota, width=10, unit="tokens")
+
+    disk_used = codex_stats.get("total_size_mb", 0.0) if codex_stats.get("exists") else 0.0
+    disk_quota = getattr(settings, "CODEX_DISK_QUOTA_MB", 1024)
+    disk_bar = render_progress_bar(disk_used, disk_quota, width=10, unit="MB")
+
     lines = [
         "📊 <b>Antigravity & Codex Kullanım İstatistikleri</b>\n",
         "🤖 <b>Antigravity / Hub Köprüsü:</b>",
@@ -381,6 +391,7 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• <b>Toplam Mesaj:</b> <code>{stats['total_messages']}</code> (👤 {stats['user_messages']} / 🤖 {stats['assistant_messages']})",
         f"• <b>Son 24 Saat Mesajı:</b> <code>{stats['messages_24h']}</code>",
         f"• <b>Tahmini Toplam Token:</b> <code>{stats['total_tokens_est']:,}</code>",
+        f"• <b>Aylık Token Kotası:</b> <code>{token_bar}</code>",
         f"• <b>Son 24 Saat Token:</b> <code>{stats['tokens_24h_est']:,}</code>",
         f"• <b>Ortalama Yanıt Süresi:</b> <code>{stats['avg_latency']}s</code> ({stats['recorded_latencies_count']} kayıt)",
         "",
@@ -390,12 +401,14 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if codex_stats.get("exists"):
         lines.extend([
             f"• <b>Dizin Boyutu:</b> <code>{codex_stats['total_size_mb']} MB</code> ({codex_stats['files_count']} dosya)",
+            f"• <b>Codex Disk Kotası:</b> <code>{disk_bar}</code>",
             f"• <b>Toplam Log Kaydı:</b> <code>{codex_stats['logs_count']:,}</code>",
             f"• <b>Oturum (Thread) Sayısı:</b> <code>{codex_stats['threads_count']}</code>",
             f"• <b>Dizin Yolu:</b> <code>{escape_html(codex_stats['path'])}</code>"
         ])
     else:
         lines.append(f"• <i>Codex dizini ({escape_html(codex_stats['path'])}) bulunamadı.</i>")
+        lines.append(f"• <b>Codex Disk Kotası:</b> <code>{disk_bar}</code>")
 
     reply_text = "\n".join(lines)
 

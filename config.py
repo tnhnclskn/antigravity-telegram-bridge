@@ -84,6 +84,10 @@ class Settings:
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
+    # Quotas
+    MONTHLY_TOKEN_QUOTA: int = int(os.getenv("MONTHLY_TOKEN_QUOTA", "10000000"))
+    CODEX_DISK_QUOTA_MB: int = int(os.getenv("CODEX_DISK_QUOTA_MB", "1024"))
+
     @classmethod
     def ensure_directories(cls):
         """Ensure necessary data directories exist."""
@@ -104,3 +108,6 @@ class Settings:
 
 
 settings = Settings()
+MONTHLY_TOKEN_QUOTA = settings.MONTHLY_TOKEN_QUOTA
+CODEX_DISK_QUOTA_MB = settings.CODEX_DISK_QUOTA_MB
+

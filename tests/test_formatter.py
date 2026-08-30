@@ -11,6 +11,7 @@ from formatter import (
     format_execution_stages_telegram,
     format_stats_footer,
     format_active_subagents_indicator,
+    render_progress_bar,
 )
 
 
@@ -471,4 +472,46 @@ def test_format_cumulative_status_telegram_various_name_keys():
     ]
     res = format_cumulative_status_telegram([], active_subagents=active_subs)
     assert res.endswith("⏳ <i>Aktif Ajanlar: researcher, tester, architect</i>")
+
+
+def test_render_progress_bar_tokens_ratio():
+    res = render_progress_bar(6_000_000, 10_000_000, width=10, unit="tokens")
+    assert res == "[██████░░░░] %60.0 (6.0M / 10.0M)"
+
+
+def test_render_progress_bar_mb():
+    res1 = render_progress_bar(512, 1024, width=10, unit="MB")
+    assert res1 == "[█████░░░░░] %50.0 (512.0 MB / 1024 MB)"
+
+    res2 = render_progress_bar(1.5, 1024, width=10, unit="MB")
+    assert res2 == "[░░░░░░░░░░] %0.1 (1.5 MB / 1024 MB)"
+
+
+def test_render_progress_bar_overflow():
+    res = render_progress_bar(12_000_000, 10_000_000, width=10, unit="tokens")
+    assert res == "[██████████] %120.0 (12.0M / 10.0M)"
+
+
+def test_render_progress_bar_zero_and_negative():
+    res_zero = render_progress_bar(0, 10_000_000, width=10, unit="tokens")
+    assert res_zero == "[░░░░░░░░░░] %0.0 (0.0M / 10.0M)"
+
+    res_total_zero = render_progress_bar(0, 0, width=10, unit="tokens")
+    assert res_total_zero == "[░░░░░░░░░░] %0.0 (0.0M / 0.0M)"
+
+    res_neg = render_progress_bar(-50, 100, width=10, unit="")
+    assert res_neg == "[░░░░░░░░░░] %0.0 (-50 / 100)"
+
+
+def test_render_progress_bar_custom_units_and_widths():
+    res_gb = render_progress_bar(25, 50, width=4, unit="GB")
+    assert res_gb == "[██░░] %50.0 (25.0 GB / 50 GB)"
+
+    res_kb = render_progress_bar(100, 200, width=6, unit="KB")
+    assert res_kb == "[███░░░] %50.0 (100.0 KB / 200 KB)"
+
+    res_custom = render_progress_bar(10, 20, width=5, unit="items")
+    assert res_custom == "[██░░░] %50.0 (10 items / 20 items)"
+
+
 

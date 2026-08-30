@@ -65,3 +65,13 @@ async def test_main_telegram_startup_executes_post_init(monkeypatch):
 
     assert init_idx < post_init_idx < start_idx
     mock_post_init.assert_awaited_once_with(mock_tg_app)
+
+
+def test_quota_settings_defaults():
+    """Verify that MONTHLY_TOKEN_QUOTA and CODEX_DISK_QUOTA_MB have correct defaults."""
+    from config import MONTHLY_TOKEN_QUOTA, CODEX_DISK_QUOTA_MB, settings
+    assert settings.MONTHLY_TOKEN_QUOTA >= 1_000_000
+    assert settings.CODEX_DISK_QUOTA_MB >= 100
+    assert MONTHLY_TOKEN_QUOTA == settings.MONTHLY_TOKEN_QUOTA
+    assert CODEX_DISK_QUOTA_MB == settings.CODEX_DISK_QUOTA_MB
+

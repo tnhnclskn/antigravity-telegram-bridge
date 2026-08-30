@@ -567,3 +567,55 @@ def format_stats_footer(duration: float, usage: Optional[dict] = None) -> str:
         if thinking:
             parts.append(f"🧠 {thinking:,} reasoning")
     return " | ".join(parts)
+
+
+def render_progress_bar(
+    used: Union[int, float],
+    total: Union[int, float],
+    width: int = 10,
+    unit: str = ""
+) -> str:
+    """
+    Render a visual progress bar with percentage and human-readable used/total numbers.
+    Safely handles overflow (>100%), negative values, zero total, and unit conversions.
+
+    Example:
+        render_progress_bar(6_000_000, 10_000_000, width=10, unit="tokens")
+        -> "[██████░░░░] %60.0 (6.0M / 10.0M)"
+        render_progress_bar(512, 1024, width=10, unit="MB")
+        -> "[█████░░░░░] %50.0 (512.0 MB / 1024 MB)"
+    """
+    if total <= 0:
+        percent = 0.0
+        ratio = 0.0
+    else:
+        ratio = max(0.0, float(used) / float(total))
+        percent = ratio * 100.0
+
+    # Clamp visual blocks between 0 and width
+    filled_count = int(round(min(1.0, max(0.0, ratio)) * width))
+    empty_count = max(0, width - filled_count)
+    bar = "█" * filled_count + "░" * empty_count
+
+    # Format values based on unit
+    unit_norm = (unit or "").strip().lower()
+    if unit_norm in ("tokens", "token", "tok", "m") or (unit == "" and total >= 1_000_000):
+        used_m = float(used) / 1_000_000.0
+        tot_m = float(total) / 1_000_000.0
+        vals_str = f"({used_m:.1f}M / {tot_m:.1f}M)"
+    elif unit_norm in ("mb", "megabytes", "megabyte"):
+        tot_str = f"{int(total)} MB" if isinstance(total, int) or total == int(total) else f"{total:.1f} MB"
+        vals_str = f"({float(used):.1f} MB / {tot_str})"
+    elif unit_norm in ("gb", "gigabytes", "gigabyte"):
+        tot_str = f"{int(total)} GB" if isinstance(total, int) or total == int(total) else f"{total:.1f} GB"
+        vals_str = f"({float(used):.1f} GB / {tot_str})"
+    elif unit_norm in ("kb", "kilobytes"):
+        tot_str = f"{int(total)} KB" if isinstance(total, int) or total == int(total) else f"{total:.1f} KB"
+        vals_str = f"({float(used):.1f} KB / {tot_str})"
+    elif unit:
+        vals_str = f"({used} {unit} / {total} {unit})"
+    else:
+        vals_str = f"({used} / {total})"
+
+    return f"[{bar}] %{percent:.1f} {vals_str}"
+

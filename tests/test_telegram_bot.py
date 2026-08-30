@@ -286,9 +286,40 @@ async def test_usage_command(monkeypatch):
     assert "Toplam Oturum:" in usage_text
     assert "Toplam Mesaj:" in usage_text
     assert "Tahmini Toplam Token:" in usage_text
+    assert "Aylık Token Kotası:" in usage_text
+    assert "Codex Disk Kotası:" in usage_text
     assert "Codex Ortamı:" in usage_text
     assert "686" in usage_text
     assert "1.5 MB" in usage_text
+    assert "1024 MB" in usage_text
+    assert "10.0M" in usage_text
+
+
+@pytest.mark.asyncio
+async def test_usage_command_codex_not_exists(monkeypatch):
+    """Test /usage command when Codex directory does not exist."""
+    update = create_mock_update(user_id=1007, username="user7", text="/usage")
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+
+    def mock_codex_stats(codex_dir=None):
+        return {
+            "exists": False,
+            "path": "/nonexistent/.codex",
+            "total_size_mb": 0.0,
+            "files_count": 0,
+            "logs_count": 0,
+            "threads_count": 0
+        }
+
+    monkeypatch.setattr(telegram_bot, "get_codex_stats", mock_codex_stats)
+
+    await usage_command(update, context)
+    update.message.reply_text.assert_awaited_once()
+    usage_text = update.message.reply_text.call_args[0][0]
+    assert "Antigravity & Codex Kullanım İstatistikleri" in usage_text
+    assert "Aylık Token Kotası:" in usage_text
+    assert "Codex Disk Kotası:" in usage_text
+    assert "bulunamadı" in usage_text
 
 
 @pytest.mark.asyncio

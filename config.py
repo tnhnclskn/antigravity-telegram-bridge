@@ -76,6 +76,7 @@ class Settings:
     STREAM_UPDATES: bool = _get_bool("STREAM_UPDATES", True)
     STREAM_EDIT_INTERVAL: float = float(os.getenv("STREAM_EDIT_INTERVAL", "1.5"))
     MAX_TELEGRAM_MESSAGE_LEN: int = 4000  # Safe boundary below 4096
+    SUBPROCESS_TIMEOUT: int = int(os.getenv("SUBPROCESS_TIMEOUT", "1800"))  # 30 mins max
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()

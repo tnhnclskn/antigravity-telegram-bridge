@@ -28,19 +28,34 @@ class AgyClient:
         proc = self._active_processes.get(user_id)
         if proc and proc.returncode is None:
             try:
-                proc.send_signal(signal.SIGTERM)
+                try:
+                    # Terminate whole process group if process group leader
+                    pgid = os.getpgid(proc.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                except Exception:
+                    proc.send_signal(signal.SIGTERM)
                 logger.info(f"Sent SIGTERM to agy process {proc.pid} for user/session {user_id}")
                 return True
             except ProcessLookupError:
-                pass
+                self._active_processes.pop(user_id, None)
             except Exception as e:
                 logger.error(f"Error terminating process for user/session {user_id}: {e}")
         return False
 
+    def cancel_all(self):
+        """Cancel all active agy processes."""
+        for uid in list(self._active_processes.keys()):
+            self.cancel_task(uid)
+
     def is_running(self, user_id: Union[int, str]) -> bool:
         """Check if a process is actively running for a user/session."""
         proc = self._active_processes.get(user_id)
-        return proc is not None and proc.returncode is None
+        if proc is None:
+            return False
+        if proc.returncode is not None:
+            self._active_processes.pop(user_id, None)
+            return False
+        return True
 
     async def run_prompt_stream(
         self,
@@ -89,7 +104,8 @@ class AgyClient:
                 cwd=workspace_dir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=os.environ.copy()
+                env=os.environ.copy(),
+                start_new_session=True
             )
             self._active_processes[user_id] = process
 
@@ -99,14 +115,17 @@ class AgyClient:
 
             # Background task to read stderr
             async def read_stderr():
-                while True:
-                    line = await process.stderr.readline()
-                    if not line:
-                        break
-                    decoded = line.decode("utf-8", errors="replace").strip()
-                    if decoded:
-                        stderr_output.append(decoded)
-                        logger.debug(f"[agy stderr {user_id}] {decoded}")
+                try:
+                    while True:
+                        line = await process.stderr.readline()
+                        if not line:
+                            break
+                        decoded = line.decode("utf-8", errors="replace").strip()
+                        if decoded:
+                            stderr_output.append(decoded)
+                            logger.debug(f"[agy stderr {user_id}] {decoded}")
+                except Exception as e:
+                    logger.debug(f"read_stderr finished with: {e}")
 
             stderr_task = asyncio.create_task(read_stderr())
 
@@ -169,9 +188,12 @@ class AgyClient:
                     }
 
             await process.wait()
-            await stderr_task
+            try:
+                await asyncio.wait_for(stderr_task, timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                stderr_task.cancel()
 
-            if process.returncode != 0 and process.returncode != -signal.SIGTERM:
+            if process.returncode != 0 and process.returncode not in (0, -signal.SIGTERM, 143):
                 error_msg = "\n".join(stderr_output) or f"Process exited with code {process.returncode}"
                 logger.error(f"agy process failed for session {user_id}: {error_msg}")
                 yield {

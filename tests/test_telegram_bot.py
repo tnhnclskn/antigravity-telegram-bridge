@@ -292,3 +292,34 @@ async def test_build_application():
             assert "status" in registered_cmds
             assert "help" in registered_cmds
             assert "cancel" in registered_cmds
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_message_concurrent_guard(monkeypatch):
+    """Test that concurrent messages from the same user are rejected with a warning."""
+    from telegram_bot import handle_incoming_message
+    update = create_mock_update(user_id=1007, username="user7", text="Hello while busy")
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+
+    # Mock agy_client.is_running to return True
+    monkeypatch.setattr(telegram_bot.agy_client, "is_running", lambda uid: True)
+
+    await handle_incoming_message(update, context)
+    update.message.reply_text.assert_awaited_once()
+    reply_text = update.message.reply_text.call_args[0][0]
+    assert "Zaten devam eden aktif bir işleminiz var" in reply_text
+
+
+@pytest.mark.asyncio
+async def test_cancel_command_success(monkeypatch):
+    """Test /cancel command when a task is active."""
+    update = create_mock_update(user_id=1008, username="user8", text="/cancel")
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+
+    # Mock agy_client.cancel_task
+    monkeypatch.setattr(telegram_bot.agy_client, "cancel_task", lambda uid: True)
+
+    await cancel_command(update, context)
+    update.message.reply_text.assert_awaited_once()
+    reply_text = update.message.reply_text.call_args[0][0]
+    assert "Çalışan görev iptal edildi" in reply_text

@@ -16,3 +16,6 @@ def test_agy_cancel_nonexistent_task():
     client = AgyClient()
     # Cancelling a non-running task should return False gracefully
     assert client.cancel_task(999999) is False
+    assert client.is_running(999999) is False
+    # cancel_all should not error when no tasks active
+    client.cancel_all()

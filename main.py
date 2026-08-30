@@ -88,6 +88,10 @@ async def main():
     finally:
         logger.info("Initiating cleanup and stopping services...")
 
+        # 1. Terminate all active agy CLI subprocesses
+        from agy_client import agy_client
+        agy_client.cancel_all()
+
         if web_server:
             logger.info("Stopping WebUI server...")
             web_server.should_exit = True
@@ -95,8 +99,10 @@ async def main():
         if tg_app:
             logger.info("Stopping Telegram poller and bot application...")
             try:
-                await tg_app.updater.stop()
-                await tg_app.stop()
+                if tg_app.updater and tg_app.updater.running:
+                    await tg_app.updater.stop()
+                if tg_app.running:
+                    await tg_app.stop()
                 await tg_app.shutdown()
             except Exception as e:
                 logger.warning(f"Error while shutting down Telegram app: {e}")

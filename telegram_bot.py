@@ -606,7 +606,16 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
     chat_id = message.chat_id
     user_id = user.id
 
-    # 1. Extract prompt and handle attachments
+    # 1. Prevent concurrent task execution for the same user
+    if agy_client.is_running(user_id):
+        await message.reply_text(
+            "⏳ <b>Zaten devam eden aktif bir işleminiz var.</b>\n\n"
+            "Lütfen mevcut yanıtın tamamlanmasını bekleyin veya işlemi durdurmak için <code>/cancel</code> komutunu gönderin.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    # 2. Extract prompt and handle attachments
     prompt_text = message.text or message.caption or ""
     attachment_paths = []
 
@@ -643,7 +652,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
         await message.reply_text("ℹ️ Lütfen bir mesaj veya dosya gönderin.")
         return
 
-    # 2. Get user session configuration
+    # 3. Get user session configuration
     session = await db.get_session(user_id)
     conversation_id = session.get("conversation_id")
     model = session.get("model") or settings.DEFAULT_MODEL
@@ -651,7 +660,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
     workspace = session.get("workspace") or settings.DEFAULT_WORKSPACE
     auto_approve = bool(session.get("auto_approve", 1))
 
-    # 3. Send initial progress message & start typing background task
+    # 4. Send initial progress message & start typing background task
     status_msg = await message.reply_text(
         "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>",
         parse_mode=ParseMode.HTML
@@ -667,7 +676,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
     executed_tools: List[Dict[str, Any]] = []
 
     try:
-        # 4. Stream response from Antigravity CLI
+        # 5. Stream response from Antigravity CLI
         async for event in agy_client.run_prompt_stream(
             user_id=user_id,
             prompt=prompt_text,
@@ -737,7 +746,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
         stop_typing.set()
         await typing_task
 
-    # 5. Format and deliver the response
+    # 6. Format and deliver the response
     if not accumulated_response.strip():
         accumulated_response = "<i>(Antigravity boş yanıt döndürdü)</i>"
 
@@ -755,14 +764,21 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
     await db.add_history(user_id, conversation_id, "user", prompt_text)
     await db.add_history(user_id, conversation_id, "assistant", accumulated_response, metadata=metadata_str)
 
-    # 5a. Finalize the stages status message
+    # 6a. Finalize the stages status message
     if executed_tools:
         stages_summary = format_execution_stages_telegram(executed_tools)
         if stages_summary:
+            if len(stages_summary) > 3800:
+                stages_summary = stages_summary[:3750] + "\n... (kısaltıldı)"
             try:
                 await status_msg.edit_text(stages_summary, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
             except Exception as e:
-                logger.warning(f"Failed to edit status message with final stages: {e}")
+                logger.warning(f"Failed to edit status message with HTML stages: {e}")
+                try:
+                    plain_stages = re.sub(r"<[^>]+>", "", stages_summary)
+                    await status_msg.edit_text(plain_stages[:3800], disable_web_page_preview=True)
+                except Exception:
+                    pass
     else:
         # If no tools were executed, delete the temporary 'Thinking...' progress message
         try:
@@ -770,7 +786,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
         except Exception:
             pass
 
-    # 5b. Convert markdown to Telegram HTML for the final result text
+    # 6b. Convert markdown to Telegram HTML for the final result text
     formatted_html = markdown_to_telegram_html(accumulated_response)
 
     # Add footer if stats are available
@@ -784,15 +800,14 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
     chunks = split_text_chunks(formatted_html, max_chars=settings.MAX_TELEGRAM_MESSAGE_LEN)
 
     # Send final result as a BRAND NEW message so it triggers a fresh notification & sound
-    try:
-        for chunk in chunks:
+    for chunk in chunks:
+        try:
             await message.reply_text(chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-    except Exception as e:
-        logger.warning(f"HTML reply failed, falling back to plain text: {e}")
-        plain_chunks = split_text_chunks(accumulated_response, max_chars=settings.MAX_TELEGRAM_MESSAGE_LEN)
-        for ch in plain_chunks:
+        except Exception as e:
+            logger.warning(f"HTML reply failed for chunk, falling back to plain text: {e}")
+            plain_chunk = re.sub(r"<[^>]+>", "", chunk) or chunk
             try:
-                await message.reply_text(ch)
+                await message.reply_text(plain_chunk, disable_web_page_preview=True)
             except Exception as fallback_err:
                 logger.error(f"Fallback plain text reply failed: {fallback_err}")
 

@@ -4,6 +4,11 @@ from formatter import (
     markdown_to_telegram_html,
     split_text_chunks,
     format_tool_status,
+    extract_tool_details,
+    format_cumulative_status_telegram,
+    format_live_progress_panel_telegram,
+    format_tool_diff_telegram,
+    format_execution_stages_telegram,
     format_stats_footer
 )
 
@@ -60,11 +65,77 @@ def test_split_text_chunks_preserves_pre_tags():
             assert "</pre>" in ch
 
 
+def test_extract_tool_details_all_tools():
+    # 1. view_file
+    assert extract_tool_details("view_file", {"TargetFile": "/root/app.py", "StartLine": 1, "EndLine": 50}) == "/root/app.py (L1-50)"
+    assert extract_tool_details("view_file", {"AbsolutePath": "/root/main.py"}) == "/root/main.py"
+
+    # 2. write_to_file
+    assert extract_tool_details("write_to_file", {"TargetFile": "/root/new.py"}) == "/root/new.py"
+
+    # 3. replace_file_content
+    assert extract_tool_details("replace_file_content", {"TargetFile": "src/utils.py", "StartLine": 10, "EndLine": 20}) == "src/utils.py (L10-20)"
+
+    # 4. run_command
+    assert extract_tool_details("run_command", {"CommandLine": "pytest -v", "Cwd": "/root/app"}) == "pytest -v"
+
+    # 5. grep_search
+    assert extract_tool_details("grep_search", {"Query": "def handle", "SearchPath": "/root/src"}) == "'def handle' in /root/src"
+    assert extract_tool_details("grep_search", {"Query": "TODO"}) == "'TODO'"
+
+    # 6. find_by_name
+    assert extract_tool_details("find_by_name", {"Pattern": "*.py", "SearchDirectory": "/root"}) == "*.py in /root"
+
+    # 7. list_dir
+    assert extract_tool_details("list_dir", {"DirectoryPath": "/root/Projects"}) == "/root/Projects"
+
+    # 8. invoke_subagent
+    assert extract_tool_details("invoke_subagent", {"Role": "Codebase Researcher", "TypeName": "research"}) == "Codebase Researcher (research)"
+    assert extract_tool_details("invoke_subagent", {"Prompt": "Search docs for API"}) == "Search docs for API"
+
+    # 9. send_message
+    assert extract_tool_details("send_message", {"RecipientName": "parent", "Recipient": "agent-123"}) == "parent (agent-123)"
+
+    # 10. manage_subagents / manage_task
+    assert extract_tool_details("manage_task", {"Action": "kill", "TaskId": "task-99"}) == "kill (task-99)"
+    assert extract_tool_details("manage_subagents", {"Action": "list"}) == "list"
+
+    # 11. search_web
+    assert extract_tool_details("search_web", {"query": "python asyncio tutorial"}) == "python asyncio tutorial"
+
+    # 12. read_url_content
+    assert extract_tool_details("read_url_content", {"Url": "https://docs.python.org/3/"}) == "https://docs.python.org/3/"
+
+    # 13. schedule
+    assert extract_tool_details("schedule", {"Prompt": "Health check", "DurationSeconds": 300}) == "Health check (300s)"
+    assert extract_tool_details("schedule", {"Prompt": "Cron job", "CronExpression": "*/5 * * * *"}) == "Cron job (*/5 * * * *)"
+
+    # 14. generate_image
+    assert extract_tool_details("generate_image", {"ImageName": "dashboard_ui"}) == "dashboard_ui"
+
+    # 15. notebook_edit
+    assert extract_tool_details("notebook_edit", {"NotebookPath": "explore.ipynb", "Action": "list"}) == "explore.ipynb (list)"
+
+    # 16. Fallback parameters / toolAction
+    assert extract_tool_details("custom_tool", {"toolAction": "Analyzing database structure"}) == "Analyzing database structure"
+    assert extract_tool_details("custom_tool", {"toolSummary": "Database analysis"}) == "Database analysis"
+
+
 def test_format_tool_status():
-    status = format_tool_status("run_command", {"CommandLine": "ls -la /root"}, state="running")
-    assert "⚡" in status
-    assert "run_command" in status
-    assert "ls -la /root" in status
+    # Running state
+    status_running = format_tool_status("run_command", {"CommandLine": "ls -la /root"}, state="running")
+    assert "⚡" in status_running
+    assert "run_command" in status_running
+    assert "ls -la /root" in status_running
+    assert "yürütülüyor" in status_running or "çalışıyor" in status_running
+
+    # Completed state
+    status_comp = format_tool_status("view_file", {"TargetFile": "app.py"}, state="completed", duration=0.42)
+    assert "✅" in status_comp
+    assert "📄" in status_comp
+    assert "view_file" in status_comp
+    assert "app.py" in status_comp
+    assert "0.4s" in status_comp
 
 
 def test_format_stats_footer():
@@ -75,9 +146,6 @@ def test_format_stats_footer():
 
 
 def test_format_tool_diff_telegram():
-    from formatter import format_tool_diff_telegram, format_execution_stages_telegram
-
-    # Test replace_file_content diff
     diff_res = format_tool_diff_telegram("replace_file_content", {
         "TargetFile": "/root/app.py",
         "Instruction": "Update port",
@@ -93,7 +161,6 @@ def test_format_tool_diff_telegram():
     assert "+ port = 38291" in diff_res
     assert 'language-diff' in diff_res
 
-    # Test stages summary
     tools = [
         {"tool_name": "replace_file_content", "tool_info": {"TargetFile": "test.py", "TargetContent": "a", "ReplacementContent": "b"}},
         {"tool_name": "run_command", "tool_info": {"CommandLine": "pytest"}}
@@ -104,17 +171,101 @@ def test_format_tool_diff_telegram():
     assert "pytest" in stages_res
 
 
-def test_format_cumulative_status_telegram():
-    from formatter import format_cumulative_status_telegram
+def test_format_cumulative_status_telegram_empty():
+    assert format_cumulative_status_telegram([]) == "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>"
 
+
+def test_format_cumulative_status_telegram_active_and_completed():
     tools = [
         {"tool_name": "view_file", "tool_info": {"TargetFile": "app.py"}, "state": "completed", "duration_seconds": 0.3},
         {"tool_name": "run_command", "tool_info": {"CommandLine": "pytest"}, "state": "running", "duration_seconds": None}
     ]
     res = format_cumulative_status_telegram(tools)
-    assert "⚙️ <b>İşlem Adımları:</b>" in res
+
+    # Active tool section check
+    assert "🔄 <b>Aktif İşlem:</b>" in res
+    assert "run_command" in res
+    assert "pytest" in res
+    assert "yürütülüyor" in res or "çalışıyor" in res
+
+    # Completed tool section check
+    assert "📋 <b>Tamamlanan Adımlar (1):</b>" in res or "⚙️ <b>İşlem Adımları:</b>" in res
     assert "view_file" in res
     assert "app.py" in res
     assert "0.3s" in res
-    assert "run_command" in res
-    assert "pytest" in res
+
+
+def test_format_cumulative_status_telegram_with_active_subagents():
+    # Via active_subagents parameter
+    active_subs = [
+        {"name": "Codebase Researcher", "type": "research", "status": "running"}
+    ]
+    tools = [
+        {"tool_name": "grep_search", "tool_info": {"Query": "class AgyClient"}, "state": "running"}
+    ]
+    res = format_cumulative_status_telegram(tools, active_subagents=active_subs)
+
+    assert "🤖 <b>Aktif Ajanlar:</b>" in res
+    assert "Codebase Researcher" in res
+    assert "research" in res
+    assert "🔄 <b>Aktif İşlem:</b>" in res
+    assert "grep_search" in res
+
+
+def test_format_cumulative_status_telegram_with_subagent_tool():
+    # Via invoke_subagent tool
+    tools = [
+        {
+            "tool_name": "invoke_subagent",
+            "tool_info": {"Role": "Test Runner", "TypeName": "testing", "Prompt": "Run all tests"},
+            "state": "running"
+        },
+        {
+            "tool_name": "view_file",
+            "tool_info": {"TargetFile": "tests/test_app.py"},
+            "state": "completed",
+            "duration_seconds": 0.5
+        }
+    ]
+    res = format_cumulative_status_telegram(tools)
+
+    assert "🤖 <b>Aktif Ajanlar:</b>" in res
+    assert "Test Runner" in res
+    assert "testing" in res
+    assert "📋 <b>Tamamlanan Adımlar" in res or "⚙️ <b>İşlem Adımları:</b>" in res
+    assert "tests/test_app.py" in res
+
+
+def test_format_cumulative_status_telegram_html_safety_and_cutoff():
+    # Test HTML escaping
+    malicious_tools = [
+        {
+            "tool_name": "run_command",
+            "tool_info": {"CommandLine": "cat <secret.txt> && echo 'test'"},
+            "state": "running"
+        }
+    ]
+    res = format_cumulative_status_telegram(malicious_tools)
+    assert "<secret.txt>" not in res
+    assert "&lt;secret.txt&gt;" in res
+
+    # Test 3500 char cutoff
+    long_tools = [
+        {
+            "tool_name": "run_command",
+            "tool_info": {"CommandLine": f"echo 'Very long step number {i} with lots of filler text to check length limitation'"},
+            "state": "completed",
+            "duration_seconds": 0.1
+        }
+        for i in range(50)
+    ]
+    long_res = format_cumulative_status_telegram(long_tools)
+    assert len(long_res) <= 3500
+    assert "..." in long_res
+
+
+def test_format_live_progress_panel_telegram_alias():
+    tools = [{"tool_name": "list_dir", "tool_info": {"DirectoryPath": "/root"}, "state": "running"}]
+    res = format_live_progress_panel_telegram(tools)
+    assert "list_dir" in res
+    assert "/root" in res

@@ -158,42 +158,172 @@ def split_text_chunks(text: str, max_chars: int = 3800) -> List[str]:
     return chunks
 
 
+TOOL_ICONS = {
+    "run_command": "⚡",
+    "view_file": "📄",
+    "write_to_file": "📝",
+    "replace_file_content": "✏️",
+    "grep_search": "🔍",
+    "find_by_name": "🔎",
+    "list_dir": "📁",
+    "invoke_subagent": "🤖",
+    "send_message": "💬",
+    "manage_subagents": "👥",
+    "manage_task": "⚙️",
+    "search_web": "🌐",
+    "read_url_content": "🌍",
+    "schedule": "⏰",
+    "generate_image": "🎨",
+    "notebook_edit": "📓",
+    "ask_question": "❓",
+}
+
+
+def extract_tool_details(tool_name: str, tool_info: dict) -> str:
+    """
+    Extract a concise, human-readable summary/target string from tool arguments.
+    Returns plain unescaped text (escaping is handled when inserting into HTML).
+    """
+    if not isinstance(tool_info, dict):
+        return ""
+
+    args = tool_info.get("parameters", tool_info) if isinstance(tool_info.get("parameters"), dict) else tool_info
+
+    if tool_name == "view_file":
+        path = args.get("TargetFile") or args.get("AbsolutePath") or args.get("FilePath") or ""
+        start = args.get("StartLine")
+        end = args.get("EndLine")
+        if path and start is not None and end is not None:
+            return f"{path} (L{start}-{end})"
+        return str(path)
+
+    elif tool_name == "write_to_file":
+        return str(args.get("TargetFile") or args.get("AbsolutePath") or "")
+
+    elif tool_name == "replace_file_content":
+        path = args.get("TargetFile") or args.get("AbsolutePath") or ""
+        start = args.get("StartLine")
+        end = args.get("EndLine")
+        if path and start is not None and end is not None:
+            return f"{path} (L{start}-{end})"
+        return str(path)
+
+    elif tool_name == "run_command":
+        cmd = args.get("CommandLine") or ""
+        return str(cmd)
+
+    elif tool_name == "grep_search":
+        q = args.get("Query") or ""
+        path = args.get("SearchPath") or ""
+        if q and path:
+            return f"'{q}' in {path}"
+        elif q:
+            return f"'{q}'"
+        return str(path)
+
+    elif tool_name == "find_by_name":
+        pat = args.get("Pattern") or ""
+        sdir = args.get("SearchDirectory") or ""
+        if pat and sdir:
+            return f"{pat} in {sdir}"
+        return str(pat or sdir)
+
+    elif tool_name == "list_dir":
+        return str(args.get("DirectoryPath") or "")
+
+    elif tool_name == "invoke_subagent":
+        role = args.get("Role") or ""
+        type_name = args.get("TypeName") or ""
+        prompt = args.get("Prompt") or ""
+        if role and type_name:
+            return f"{role} ({type_name})"
+        elif role:
+            return str(role)
+        elif type_name:
+            return str(type_name)
+        elif prompt:
+            return str(prompt[:80])
+        return ""
+
+    elif tool_name == "send_message":
+        r_name = args.get("RecipientName") or ""
+        r_id = args.get("Recipient") or ""
+        msg = args.get("Message") or ""
+        if r_name and r_id:
+            return f"{r_name} ({r_id})"
+        elif r_name:
+            return str(r_name)
+        elif r_id:
+            return str(r_id)
+        elif msg:
+            return str(msg[:60])
+        return ""
+
+    elif tool_name in ("manage_subagents", "manage_task"):
+        action = args.get("Action") or ""
+        task_id = args.get("TaskId") or ""
+        if action and task_id:
+            return f"{action} ({task_id})"
+        return str(action or task_id)
+
+    elif tool_name == "search_web":
+        return str(args.get("query") or "")
+
+    elif tool_name == "read_url_content":
+        return str(args.get("Url") or "")
+
+    elif tool_name == "schedule":
+        prompt = args.get("Prompt") or ""
+        dur = args.get("DurationSeconds")
+        cron = args.get("CronExpression")
+        if dur is not None:
+            return f"{prompt} ({dur}s)" if prompt else f"{dur}s"
+        elif cron:
+            return f"{prompt} ({cron})" if prompt else f"{cron}"
+        return str(prompt)
+
+    elif tool_name == "generate_image":
+        return str(args.get("ImageName") or args.get("Prompt") or "")
+
+    elif tool_name == "notebook_edit":
+        nb = args.get("NotebookPath") or ""
+        action = args.get("Action") or ""
+        if nb and action:
+            return f"{nb} ({action})"
+        return str(nb or action)
+
+    # Generic fallback
+    if "toolAction" in args and args["toolAction"]:
+        return str(args["toolAction"])
+    if "toolSummary" in args and args["toolSummary"]:
+        return str(args["toolSummary"])
+    if "Description" in args and args["Description"]:
+        return str(args["Description"])
+    if "Instruction" in args and args["Instruction"]:
+        return str(args["Instruction"])
+
+    for k, v in args.items():
+        if isinstance(v, (str, int, float)) and v:
+            return str(v)
+
+    return ""
+
+
 def format_tool_status(tool_name: str, tool_args: dict, state: str = "running", duration: Optional[float] = None) -> str:
     """Format an informative status message when a tool is executed."""
-    icons = {
-        "run_command": "⚡",
-        "view_file": "📄",
-        "write_to_file": "📝",
-        "replace_file_content": "✏️",
-        "grep_search": "🔍",
-        "find_by_name": "🔎",
-        "list_dir": "📁",
-        "search_web": "🌐",
-        "read_url_content": "🌍",
-        "generate_image": "🎨",
-        "ask_question": "❓",
-        "invoke_subagent": "🤖",
-    }
-    icon = icons.get(tool_name, "⚙️")
+    icon = TOOL_ICONS.get(tool_name, "⚙️")
+    details = extract_tool_details(tool_name, tool_args)
 
-    # Handle parameters if nested or flat
-    args = tool_args.get("parameters", tool_args) if isinstance(tool_args, dict) else {}
-
-    arg_summary = ""
-    if tool_name == "run_command" and "CommandLine" in args:
-        arg_summary = f": <code>{escape_html(str(args['CommandLine'])[:80])}</code>"
-    elif tool_name in ("view_file", "write_to_file", "replace_file_content") and "TargetFile" in args:
-        arg_summary = f": <code>{escape_html(str(args['TargetFile'])[:60])}</code>"
-    elif tool_name in ("view_file", "write_to_file") and "AbsolutePath" in args:
-        arg_summary = f": <code>{escape_html(str(args['AbsolutePath'])[:60])}</code>"
-    elif tool_name == "search_web" and "query" in args:
-        arg_summary = f": <i>{escape_html(str(args['query'])[:60])}</i>"
+    details_html = ""
+    if details:
+        d_str = details[:80] + ("..." if len(details) > 80 else "")
+        details_html = f": <code>{escape_html(d_str)}</code>"
 
     if state == "running":
-        return f"{icon} <b>Çalıştırılıyor:</b> <code>{escape_html(tool_name)}</code>{arg_summary}..."
+        return f"{icon} <code>{escape_html(tool_name)}</code>{details_html} ⏳ <i>(yürütülüyor...)</i>"
     else:
-        dur_str = f" ({duration:.1f}s)" if duration else ""
-        return f"✅ <b>Tamamlandı:</b> <code>{escape_html(tool_name)}</code>{arg_summary}{dur_str}"
+        dur_str = f" [{duration:.1f}s]" if duration is not None else ""
+        return f"✅ {icon} <code>{escape_html(tool_name)}</code>{details_html}{dur_str}"
 
 
 def format_tool_diff_telegram(tool_name: str, tool_info: dict) -> str:
@@ -250,29 +380,101 @@ def format_tool_diff_telegram(tool_name: str, tool_info: dict) -> str:
     return f"⚙️ <b>İşlem:</b> <code>{escape_html(tool_name)}</code>"
 
 
-def format_cumulative_status_telegram(tools: List[dict]) -> str:
+def format_cumulative_status_telegram(
+    tools: List[dict],
+    active_subagents: Optional[List[dict]] = None,
+    elapsed_seconds: Optional[float] = None
+) -> str:
     """
     Format all executed and currently running tool stages into a cumulative live progress message.
-    Preserves all previous stages while updating the active stage.
+    Displays:
+    - 🤖 Aktif Ajanlar (Active Subagents)
+    - 🔄 Aktif İşlem (Currently running tool)
+    - 📋 Tamamlanan Adımlar (Completed steps)
     """
-    if not tools:
+    subs = []
+    if active_subagents:
+        for sa in active_subagents:
+            if isinstance(sa, dict):
+                subs.append(sa)
+
+    running_subagent_tools = []
+    normal_tools = []
+    for t in (tools or []):
+        t_name = t.get("tool_name", "")
+        t_state = t.get("state", "running")
+        if t_name in ("invoke_subagent",) and t_state == "running":
+            running_subagent_tools.append(t)
+        else:
+            normal_tools.append(t)
+
+    if not tools and not active_subagents and not subs:
         return "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>"
 
-    lines = ["⚙️ <b>İşlem Adımları:</b>\n"]
-    for t in tools:
-        t_name = t.get("tool_name", "")
-        t_info = t.get("tool_info", {})
-        state = t.get("state", "running")
-        duration = t.get("duration_seconds")
-        line = format_tool_status(t_name, t_info, state, duration)
-        lines.append(f"• {line}")
+    sections = []
 
-    full_text = "\n".join(lines)
-    # Ensure length doesn't exceed Telegram message edit limits (~3800 chars)
+    # Section 1: Active Subagents
+    subagent_lines = []
+    for sa in subs:
+        name = sa.get("name") or sa.get("role") or sa.get("Role") or "Subagent"
+        sa_type = sa.get("type") or sa.get("TypeName") or ""
+        type_str = f" (<code>{escape_html(sa_type)}</code>)" if sa_type else ""
+        subagent_lines.append(f"• ⏳ <b>{escape_html(name)}</b>{type_str} - <i>Çalışıyor...</i>")
+
+    for t in running_subagent_tools:
+        t_info = t.get("tool_info", {})
+        args = t_info.get("parameters", t_info) if isinstance(t_info, dict) else {}
+        role = args.get("Role") or args.get("TypeName") or "Subagent"
+        type_name = args.get("TypeName") if args.get("Role") else ""
+        type_str = f" (<code>{escape_html(type_name)}</code>)" if type_name else ""
+        subagent_lines.append(f"• ⏳ <b>{escape_html(role)}</b>{type_str} - <i>Çalışıyor...</i>")
+
+    if subagent_lines:
+        sections.append("🤖 <b>Aktif Ajanlar:</b>\n" + "\n".join(subagent_lines))
+
+    # Section 2: Active Tools (Running)
+    running_tools = [t for t in normal_tools if t.get("state") == "running"]
+    if running_tools:
+        run_lines = []
+        for t in running_tools:
+            t_name = t.get("tool_name", "")
+            t_info = t.get("tool_info", {})
+            status_line = format_tool_status(t_name, t_info, state="running")
+            run_lines.append(f"• {status_line}")
+        sections.append("🔄 <b>Aktif İşlem:</b>\n" + "\n".join(run_lines))
+
+    # Section 3: Completed Tools
+    completed_tools = [t for t in (tools or []) if t.get("state") == "completed"]
+    if completed_tools:
+        comp_lines = []
+        for t in completed_tools:
+            t_name = t.get("tool_name", "")
+            t_info = t.get("tool_info", {})
+            duration = t.get("duration_seconds")
+            status_line = format_tool_status(t_name, t_info, state="completed", duration=duration)
+            comp_lines.append(f"• {status_line}")
+
+        header = f"📋 <b>Tamamlanan Adımlar ({len(completed_tools)}):</b>"
+        if len(comp_lines) > 10:
+            truncated_comp = comp_lines[:3] + [f"• ... <i>({len(comp_lines) - 8} adım daha)</i>"] + comp_lines[-5:]
+            sections.append(f"{header}\n" + "\n".join(truncated_comp))
+        else:
+            sections.append(f"{header}\n" + "\n".join(comp_lines))
+
+    full_text = "\n\n".join(sections) if sections else "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>"
+
+    # Enforce safe cutoff (< 3500 chars)
     if len(full_text) > 3500:
-        truncated = lines[:3] + ["• ..."] + lines[-8:]
+        lines = full_text.splitlines()
+        truncated = lines[:5] + ["• ..."] + lines[-10:]
         full_text = "\n".join(truncated)
+        if len(full_text) > 3500:
+            full_text = full_text[:3450] + "\n..."
+
     return full_text
+
+
+format_live_progress_panel_telegram = format_cumulative_status_telegram
 
 
 def format_execution_stages_telegram(tools: List[dict]) -> str:

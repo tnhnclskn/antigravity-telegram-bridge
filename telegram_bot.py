@@ -792,6 +792,81 @@ async def send_typing_periodically(chat_id: int, bot, stop_event: asyncio.Event)
             pass
 
 
+class TelegramLiveUpdater:
+    """
+    Manages throttled live message editing for Telegram to provide instant feedback
+    while respecting Telegram API rate limits (typically ~1 edit per second per chat).
+    """
+    def __init__(self, message_obj: Any, interval: float = 1.2):
+        self.message_obj = message_obj
+        self.interval = max(0.01, interval)
+        self.last_edit_time = 0.0
+        self.target_text = ""
+        self.last_sent_text = ""
+        self.pending_task: Optional[asyncio.Task] = None
+        self._lock = asyncio.Lock()
+        self._closed = False
+
+    async def update(self, text: str):
+        """Update live status message with immediate first edit and throttled subsequent edits."""
+        if self._closed or not text or text == self.last_sent_text:
+            return
+
+        self.target_text = text
+        now = time.time()
+        time_since_last = now - self.last_edit_time
+
+        if time_since_last >= self.interval:
+            # Can edit immediately
+            if self.pending_task and not self.pending_task.done():
+                self.pending_task.cancel()
+                self.pending_task = None
+            await self._apply_edit(text)
+        else:
+            # Throttled: schedule trailing update if not already scheduled
+            if self.pending_task is None or self.pending_task.done():
+                delay = max(0.05, self.interval - time_since_last)
+                self.pending_task = asyncio.create_task(self._delayed_edit(delay))
+
+    async def _delayed_edit(self, delay: float):
+        try:
+            await asyncio.sleep(delay)
+            if not self._closed and self.target_text and self.target_text != self.last_sent_text:
+                await self._apply_edit(self.target_text)
+        except asyncio.CancelledError:
+            pass
+
+    async def _apply_edit(self, text: str):
+        async with self._lock:
+            if self._closed or not text or text == self.last_sent_text:
+                return
+            try:
+                await self.message_obj.edit_text(text, parse_mode=ParseMode.HTML)
+                self.last_sent_text = text
+                self.last_edit_time = time.time()
+            except Exception as e:
+                err_str = str(e).lower()
+                if "not modified" in err_str:
+                    self.last_sent_text = text
+                elif "can't parse entities" in err_str or "unsupported start tag" in err_str:
+                    try:
+                        plain_text = re.sub(r"<[^>]+>", "", text)
+                        await self.message_obj.edit_text(plain_text)
+                        self.last_sent_text = text
+                        self.last_edit_time = time.time()
+                    except Exception:
+                        pass
+                else:
+                    logger.debug(f"Live status edit failed/skipped: {e}")
+
+    async def close(self):
+        """Close updater and cancel any pending timers."""
+        self._closed = True
+        if self.pending_task and not self.pending_task.done():
+            self.pending_task.cancel()
+            self.pending_task = None
+
+
 @authorized_only
 async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text, photos, and document messages from authorized users."""
@@ -888,8 +963,12 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
         stop_typing = asyncio.Event()
         typing_task = asyncio.create_task(send_typing_periodically(chat_id, context.bot, stop_typing))
 
-        last_edit_time = time.time()
-        last_status_text = ""
+        live_updater = TelegramLiveUpdater(
+            message_obj=status_msg,
+            interval=settings.STREAM_EDIT_INTERVAL
+        )
+        live_updater.last_sent_text = "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>"
+
         accumulated_response = ""
         final_result_data = None
         executed_tools: List[Dict[str, Any]] = []
@@ -921,7 +1000,22 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
                     duration = event.get("duration_seconds")
 
                     if tool_name:
-                        existing = next((t for t in executed_tools if t.get("tool_name") == tool_name and t.get("tool_info") == tool_info), None)
+                        # Match the most recent running tool with the same name and arguments
+                        existing = next(
+                            (t for t in reversed(executed_tools)
+                             if t.get("tool_name") == tool_name
+                             and t.get("tool_info") == tool_info
+                             and t.get("state") in ("running", "active", "ACTIVE")),
+                            None
+                        )
+                        if not existing:
+                            existing = next(
+                                (t for t in reversed(executed_tools)
+                                 if t.get("tool_name") == tool_name
+                                 and t.get("tool_info") == tool_info),
+                                None
+                            )
+
                         if existing:
                             existing["state"] = state
                             if duration is not None:
@@ -935,16 +1029,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
                             })
 
                         current_status = format_cumulative_status_telegram(executed_tools)
-
-                        # Update status message with debouncing
-                        now = time.time()
-                        if current_status != last_status_text and (now - last_edit_time) >= settings.STREAM_EDIT_INTERVAL:
-                            try:
-                                await status_msg.edit_text(current_status, parse_mode=ParseMode.HTML)
-                                last_status_text = current_status
-                                last_edit_time = now
-                            except Exception:
-                                pass
+                        await live_updater.update(current_status)
 
                 elif event_type == "result":
                     final_result_data = event
@@ -962,6 +1047,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
             logger.exception(f"Error processing prompt for user {user_id}")
             accumulated_response = f"❌ <b>Bir hata oluştu:</b>\n<code>{escape_html(str(e))}</code>"
         finally:
+            await live_updater.close()
             stop_typing.set()
             await typing_task
 

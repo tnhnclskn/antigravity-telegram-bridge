@@ -20,6 +20,18 @@ logger = logging.getLogger(__name__)
 MODEL_EFFORT_SUFFIXES = {"low", "medium", "high"}
 
 
+def normalize_event_state(state: Optional[str]) -> str:
+    """Normalize raw CLI event states (e.g. ACTIVE, DONE) to standard running/completed."""
+    if not state:
+        return "running"
+    s = str(state).strip().lower()
+    if s in ("active", "running", "start", "started", "in_progress"):
+        return "running"
+    if s in ("done", "completed", "complete", "finished", "success"):
+        return "completed"
+    return s
+
+
 def normalize_model_name(model: Optional[str]) -> Optional[str]:
     """Remove an agy catalog effort suffix so effort can be selected separately."""
     if not model:
@@ -172,6 +184,8 @@ class AgyClient:
                     step_update = event.get("step_update", {})
                     step_type = step_update.get("step_type")
                     text_delta = step_update.get("text_delta", "")
+                    raw_state = step_update.get("state")
+                    normalized_state = normalize_event_state(raw_state)
                     
                     if text_delta:
                         accumulated_text += text_delta
@@ -179,7 +193,7 @@ class AgyClient:
                     yield {
                         "type": "step_update",
                         "step_type": step_type,
-                        "state": step_update.get("state"),
+                        "state": normalized_state,
                         "text_delta": text_delta,
                         "accumulated_text": accumulated_text,
                         "tool_name": step_update.get("tool_name"),

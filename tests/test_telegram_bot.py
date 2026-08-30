@@ -61,6 +61,8 @@ def create_mock_update(user_id: int = 12345, username: str = "testuser", text: s
     message.caption = None
     message.photo = None
     message.document = None
+    message.voice = None
+    message.audio = None
     message.reply_text = AsyncMock()
 
     update.effective_user = user
@@ -450,7 +452,10 @@ async def test_handle_incoming_message_concurrent_guard(monkeypatch):
     assert "kuyruğa alındı" in reply_text
     
     # Release the lock so task can finish, but we also mock agy_client stream to return immediately
-    monkeypatch.setattr("telegram_bot.agy_client.run_prompt_stream", AsyncMock(return_value=None))
+    async def empty_stream(*args, **kwargs):
+        if False:
+            yield None
+    monkeypatch.setattr("telegram_bot.agy_client.run_prompt_stream", empty_stream)
     lock.release()
     await task
 
@@ -526,8 +531,142 @@ async def test_handle_incoming_media(monkeypatch):
     
     # mock client
     monkeypatch.setattr("telegram_bot.agy_client.is_running", lambda uid: False)
-    monkeypatch.setattr("telegram_bot.agy_client.run_prompt_stream", AsyncMock(return_value=None))
+    async def empty_stream(*args, **kwargs):
+        if False:
+            yield None
+    monkeypatch.setattr("telegram_bot.agy_client.run_prompt_stream", empty_stream)
     
     await handle_incoming_message(update, context)
     voice_file_mock.download_to_drive.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_live_updater_immediate_first_and_throttling():
+    from telegram_bot import TelegramLiveUpdater
+    mock_msg = AsyncMock()
+    updater = TelegramLiveUpdater(mock_msg, interval=0.1)
+
+    # First update should execute immediately without waiting
+    await updater.update("Status 1")
+    assert mock_msg.edit_text.await_count == 1
+    assert mock_msg.edit_text.call_args[0][0] == "Status 1"
+
+    # Rapid second update within 0.1s should schedule delayed update
+    await updater.update("Status 2")
+    assert mock_msg.edit_text.await_count == 1  # Not yet called synchronously
+
+    # Wait for throttle interval to expire
+    await asyncio.sleep(0.15)
+    assert mock_msg.edit_text.await_count == 2
+    assert mock_msg.edit_text.call_args[0][0] == "Status 2"
+
+    await updater.close()
+
+
+@pytest.mark.asyncio
+async def test_telegram_live_updater_error_handling_and_fallback():
+    from telegram_bot import TelegramLiveUpdater
+    mock_msg = AsyncMock()
+    # First edit raises entity parse error, second attempt in fallback succeeds
+    call_count = 0
+
+    async def fake_edit_text(text, parse_mode=None):
+        nonlocal call_count
+        call_count += 1
+        if parse_mode is not None:
+            raise Exception("Can't parse entities: unclosed tag")
+        return True
+
+    mock_msg.edit_text = fake_edit_text
+    updater = TelegramLiveUpdater(mock_msg, interval=0.05)
+
+    await updater.update("<b>Bold unclosed")
+    assert call_count == 2  # Attempted HTML, caught error and retried without parse_mode
+    await updater.close()
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_message_live_streaming_tools_and_final_response(monkeypatch):
+    """Test full live streaming updates when tools are executed."""
+    from telegram_bot import handle_incoming_message
+    update = create_mock_update(user_id=1020, username="user20", text="Find files and summarize")
+    context = MagicMock()
+
+    status_msg = AsyncMock()
+    final_reply_msg = AsyncMock()
+    update.message.reply_text = AsyncMock(side_effect=[status_msg, final_reply_msg])
+
+    async def mock_tool_stream(*args, **kwargs):
+        yield {"type": "init", "conversation_id": "conv-test-live-1"}
+        yield {
+            "type": "step_update",
+            "step_type": "tool",
+            "state": "running",
+            "tool_name": "find_by_name",
+            "tool_info": {"parameters": {"Pattern": "*.py", "SearchDirectory": "/root"}}
+        }
+        yield {
+            "type": "step_update",
+            "step_type": "tool",
+            "state": "completed",
+            "tool_name": "find_by_name",
+            "duration_seconds": 0.12,
+            "tool_info": {"parameters": {"Pattern": "*.py", "SearchDirectory": "/root"}}
+        }
+        yield {
+            "type": "result",
+            "conversation_id": "conv-test-live-1",
+            "response": "Here are your files:\n- main.py",
+            "duration_seconds": 0.5,
+            "usage": {"total_tokens": 120, "thinking_tokens": 40}
+        }
+
+    monkeypatch.setattr("telegram_bot.agy_client.run_prompt_stream", mock_tool_stream)
+
+    await handle_incoming_message(update, context)
+
+    # Initial status reply was created
+    assert update.message.reply_text.call_count >= 2
+    # status_msg.edit_text was called during streaming (live progress & stages summary)
+    assert status_msg.edit_text.await_count >= 1
+    # Check that final message reply was sent
+    final_reply_msg_args = update.message.reply_text.call_args_list[-1][0][0]
+    assert "Here are your files" in final_reply_msg_args
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_message_no_tools_deletes_thinking_message(monkeypatch):
+    """Test that when no tools are executed, the temporary thinking status message is deleted."""
+    from telegram_bot import handle_incoming_message
+    update = create_mock_update(user_id=1021, username="user21", text="Hello world")
+    context = MagicMock()
+
+    status_msg = AsyncMock()
+    final_reply_msg = AsyncMock()
+    update.message.reply_text = AsyncMock(side_effect=[status_msg, final_reply_msg])
+
+    async def mock_text_only_stream(*args, **kwargs):
+        yield {"type": "init", "conversation_id": "conv-test-direct"}
+        yield {
+            "type": "step_update",
+            "step_type": "agent_response",
+            "text_delta": "Hello from LLM!"
+        }
+        yield {
+            "type": "result",
+            "conversation_id": "conv-test-direct",
+            "response": "Hello from LLM!",
+            "duration_seconds": 0.2
+        }
+
+    monkeypatch.setattr("telegram_bot.agy_client.run_prompt_stream", mock_text_only_stream)
+
+    await handle_incoming_message(update, context)
+
+    # status_msg should be deleted since no tools were executed
+    status_msg.delete.assert_awaited_once()
+    # Final response delivered
+    final_reply_args = update.message.reply_text.call_args_list[-1][0][0]
+    assert "Hello from LLM!" in final_reply_args
+
 

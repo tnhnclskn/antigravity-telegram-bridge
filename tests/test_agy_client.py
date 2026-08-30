@@ -76,3 +76,89 @@ def test_model_names_are_normalized_for_separate_effort_selection():
     assert normalize_model_name("gpt-oss-120b-medium") == "gpt-oss-120b"
     assert normalize_model_name("claude-sonnet-4-6") == "claude-sonnet-4-6"
     assert normalize_model_name(None) is None
+
+
+def test_normalize_event_state():
+    from agy_client import normalize_event_state
+    assert normalize_event_state("ACTIVE") == "running"
+    assert normalize_event_state("active") == "running"
+    assert normalize_event_state("RUNNING") == "running"
+    assert normalize_event_state("running") == "running"
+    assert normalize_event_state("start") == "running"
+    assert normalize_event_state("started") == "running"
+    assert normalize_event_state("DONE") == "completed"
+    assert normalize_event_state("done") == "completed"
+    assert normalize_event_state("COMPLETED") == "completed"
+    assert normalize_event_state("completed") == "completed"
+    assert normalize_event_state("SUCCESS") == "completed"
+    assert normalize_event_state(None) == "running"
+    assert normalize_event_state("") == "running"
+
+
+@pytest.mark.asyncio
+async def test_prompt_stream_normalizes_step_update_states(monkeypatch):
+    from agy_client import AgyClient
+    client = AgyClient(bin_path="agy")
+
+    class FakeReader:
+        def __init__(self, lines):
+            self.lines = iter(lines)
+
+        async def readline(self):
+            try:
+                return next(self.lines)
+            except StopIteration:
+                await asyncio.sleep(0)
+                return b""
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self):
+            lines = [
+                json.dumps({"event": "init", "conversation_id": "c-1"}).encode() + b"\n",
+                json.dumps({
+                    "event": "step_update",
+                    "step_update": {
+                        "step_type": "tool",
+                        "state": "ACTIVE",
+                        "tool_name": "find_by_name",
+                        "tool_info": {"parameters": {"Pattern": "*.py"}}
+                    }
+                }).encode() + b"\n",
+                json.dumps({
+                    "event": "step_update",
+                    "step_update": {
+                        "step_type": "tool",
+                        "state": "DONE",
+                        "tool_name": "find_by_name",
+                        "duration_seconds": 0.05,
+                        "tool_info": {"parameters": {"Pattern": "*.py"}}
+                    }
+                }).encode() + b"\n",
+                json.dumps({"event": "result", "result": {"response": "Found files"}}).encode() + b"\n",
+            ]
+            self.stdout = FakeReader(lines)
+            self.stderr = FakeReader([])
+
+        async def wait(self):
+            return self.returncode
+
+    async def fake_create(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    events = [event async for event in client.run_prompt_stream(
+        user_id="test",
+        prompt="Find files",
+    )]
+
+    assert len(events) == 4
+    assert events[0]["type"] == "init"
+    assert events[1]["type"] == "step_update"
+    assert events[1]["state"] == "running"  # Normalized from ACTIVE
+    assert events[2]["type"] == "step_update"
+    assert events[2]["state"] == "completed"  # Normalized from DONE
+    assert events[3]["type"] == "result"
+    assert events[3]["response"] == "Found files"
+

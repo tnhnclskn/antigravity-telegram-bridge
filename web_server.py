@@ -429,7 +429,20 @@ async def stream_chat(req: ChatRequest, _: None = Depends(require_auth)):
                         tool_info = event.get("tool_info", {})
                         state_val = event.get("state", "running")
                         duration = event.get("duration_seconds")
-                        existing = next((t for t in executed_tools if t.get("tool_name") == tool_name and t.get("tool_info") == tool_info), None)
+                        existing = next(
+                            (t for t in reversed(executed_tools)
+                             if t.get("tool_name") == tool_name
+                             and t.get("tool_info") == tool_info
+                             and t.get("state") in ("running", "active", "ACTIVE")),
+                            None
+                        )
+                        if not existing:
+                            existing = next(
+                                (t for t in reversed(executed_tools)
+                                 if t.get("tool_name") == tool_name
+                                 and t.get("tool_info") == tool_info),
+                                None
+                            )
                         if existing:
                             existing["state"] = state_val
                             if duration is not None:

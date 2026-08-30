@@ -309,6 +309,22 @@ def extract_tool_details(tool_name: str, tool_info: dict) -> str:
     return ""
 
 
+def is_running_state(state: Optional[str]) -> bool:
+    """Check if state represents an ongoing/active tool execution."""
+    if not state:
+        return True
+    s = str(state).strip().lower()
+    return s in ("running", "active", "start", "started", "in_progress")
+
+
+def is_completed_state(state: Optional[str]) -> bool:
+    """Check if state represents a finished tool execution."""
+    if not state:
+        return False
+    s = str(state).strip().lower()
+    return s in ("completed", "done", "complete", "finished", "success")
+
+
 def format_tool_status(tool_name: str, tool_args: dict, state: str = "running", duration: Optional[float] = None) -> str:
     """Format an informative status message when a tool is executed."""
     icon = TOOL_ICONS.get(tool_name, "⚙️")
@@ -319,7 +335,7 @@ def format_tool_status(tool_name: str, tool_args: dict, state: str = "running", 
         d_str = details[:80] + ("..." if len(details) > 80 else "")
         details_html = f": <code>{escape_html(d_str)}</code>"
 
-    if state == "running":
+    if is_running_state(state):
         return f"{icon} <code>{escape_html(tool_name)}</code>{details_html} ⏳ <i>(yürütülüyor...)</i>"
     else:
         dur_str = f" [{duration:.1f}s]" if duration is not None else ""
@@ -403,7 +419,7 @@ def format_cumulative_status_telegram(
     for t in (tools or []):
         t_name = t.get("tool_name", "")
         t_state = t.get("state", "running")
-        if t_name in ("invoke_subagent",) and t_state == "running":
+        if t_name in ("invoke_subagent",) and is_running_state(t_state):
             running_subagent_tools.append(t)
         else:
             normal_tools.append(t)
@@ -433,7 +449,7 @@ def format_cumulative_status_telegram(
         sections.append("🤖 <b>Aktif Ajanlar:</b>\n" + "\n".join(subagent_lines))
 
     # Section 2: Active Tools (Running)
-    running_tools = [t for t in normal_tools if t.get("state") == "running"]
+    running_tools = [t for t in normal_tools if is_running_state(t.get("state"))]
     if running_tools:
         run_lines = []
         for t in running_tools:
@@ -444,7 +460,7 @@ def format_cumulative_status_telegram(
         sections.append("🔄 <b>Aktif İşlem:</b>\n" + "\n".join(run_lines))
 
     # Section 3: Completed Tools
-    completed_tools = [t for t in (tools or []) if t.get("state") == "completed"]
+    completed_tools = [t for t in (tools or []) if is_completed_state(t.get("state"))]
     if completed_tools:
         comp_lines = []
         for t in completed_tools:

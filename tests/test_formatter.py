@@ -269,3 +269,41 @@ def test_format_live_progress_panel_telegram_alias():
     res = format_live_progress_panel_telegram(tools)
     assert "list_dir" in res
     assert "/root" in res
+
+
+def test_is_running_and_completed_state_helpers():
+    from formatter import is_running_state, is_completed_state
+    assert is_running_state("running") is True
+    assert is_running_state("ACTIVE") is True
+    assert is_running_state("active") is True
+    assert is_running_state("start") is True
+    assert is_running_state("started") is True
+    assert is_running_state(None) is True
+    assert is_running_state("done") is False
+    assert is_running_state("completed") is False
+
+    assert is_completed_state("completed") is True
+    assert is_completed_state("DONE") is True
+    assert is_completed_state("done") is True
+    assert is_completed_state("finished") is True
+    assert is_completed_state("success") is True
+    assert is_completed_state("running") is False
+    assert is_completed_state("ACTIVE") is False
+    assert is_completed_state(None) is False
+
+
+def test_format_cumulative_status_telegram_with_active_and_done_states():
+    # Tools with raw ACTIVE and DONE states as emitted by agy CLI
+    tools = [
+        {"tool_name": "find_by_name", "tool_info": {"Pattern": "*.py", "SearchDirectory": "/root"}, "state": "DONE", "duration_seconds": 0.05},
+        {"tool_name": "grep_search", "tool_info": {"Query": "class AgyClient", "SearchPath": "/root"}, "state": "ACTIVE"}
+    ]
+    res = format_cumulative_status_telegram(tools)
+    assert "🔄 <b>Aktif İşlem:</b>" in res
+    assert "grep_search" in res
+    assert "class AgyClient" in res
+    assert "📋 <b>Tamamlanan Adımlar (1):</b>" in res
+    assert "find_by_name" in res
+    assert "*.py in /root" in res
+    assert "0.1s" in res or "0.0s" in res
+

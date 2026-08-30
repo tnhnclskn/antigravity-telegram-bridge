@@ -752,7 +752,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderStageCard(container, toolName, toolInfo, state, duration) {
         const info = toolInfo || {};
-        const isRunning = state === 'running';
+        const stateStr = (state || '').toString().toLowerCase();
+        const isRunning = stateStr === 'running' || stateStr === 'active' || stateStr === 'start' || stateStr === 'started';
         const cardId = `stage-${toolName}-${info.TargetFile || info.CommandLine || info.AbsolutePath || info.SearchPath || info.query || Math.random()}`;
 
         let card = container.querySelector(`[data-stage-id="${CSS.escape(cardId)}"]`);

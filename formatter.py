@@ -396,6 +396,9 @@ def format_tool_diff_telegram(tool_name: str, tool_info: dict) -> str:
     return f"⚙️ <b>İşlem:</b> <code>{escape_html(tool_name)}</code>"
 
 
+LOADING_INDICATOR = "⏳ <i>İşlem devam ediyor...</i>"
+
+
 def format_cumulative_status_telegram(
     tools: List[dict],
     active_subagents: Optional[List[dict]] = None,
@@ -407,6 +410,7 @@ def format_cumulative_status_telegram(
     - 🤖 Aktif Ajanlar (Active Subagents)
     - 🔄 Aktif İşlem (Currently running tool)
     - 📋 Tamamlanan Adımlar (Completed steps)
+    - ⏳ İşlem devam ediyor... (Loading indicator at the bottom)
     """
     subs = []
     if active_subagents:
@@ -425,7 +429,7 @@ def format_cumulative_status_telegram(
             normal_tools.append(t)
 
     if not tools and not active_subagents and not subs:
-        return "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>"
+        return f"🧠 <i>Düşünülüyor ve hazırlanıyor...</i>\n\n{LOADING_INDICATOR}"
 
     sections = []
 
@@ -487,6 +491,7 @@ def format_cumulative_status_telegram(
         if len(full_text) > 3500:
             full_text = full_text[:3450] + "\n..."
 
+    full_text += f"\n\n{LOADING_INDICATOR}"
     return full_text
 
 

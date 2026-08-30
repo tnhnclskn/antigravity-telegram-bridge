@@ -9,7 +9,8 @@ from formatter import (
     format_live_progress_panel_telegram,
     format_tool_diff_telegram,
     format_execution_stages_telegram,
-    format_stats_footer
+    format_stats_footer,
+    LOADING_INDICATOR
 )
 
 
@@ -172,7 +173,8 @@ def test_format_tool_diff_telegram():
 
 
 def test_format_cumulative_status_telegram_empty():
-    assert format_cumulative_status_telegram([]) == "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>"
+    expected = f"🧠 <i>Düşünülüyor ve hazırlanıyor...</i>\n\n{LOADING_INDICATOR}"
+    assert format_cumulative_status_telegram([]) == expected
 
 
 def test_format_cumulative_status_telegram_active_and_completed():
@@ -194,6 +196,10 @@ def test_format_cumulative_status_telegram_active_and_completed():
     assert "app.py" in res
     assert "0.3s" in res
 
+    # Intermediate loading indicator check
+    assert LOADING_INDICATOR in res
+    assert res.endswith(LOADING_INDICATOR)
+
 
 def test_format_cumulative_status_telegram_with_active_subagents():
     # Via active_subagents parameter
@@ -210,6 +216,8 @@ def test_format_cumulative_status_telegram_with_active_subagents():
     assert "research" in res
     assert "🔄 <b>Aktif İşlem:</b>" in res
     assert "grep_search" in res
+    assert LOADING_INDICATOR in res
+    assert res.endswith(LOADING_INDICATOR)
 
 
 def test_format_cumulative_status_telegram_with_subagent_tool():
@@ -234,6 +242,8 @@ def test_format_cumulative_status_telegram_with_subagent_tool():
     assert "testing" in res
     assert "📋 <b>Tamamlanan Adımlar" in res or "⚙️ <b>İşlem Adımları:</b>" in res
     assert "tests/test_app.py" in res
+    assert LOADING_INDICATOR in res
+    assert res.endswith(LOADING_INDICATOR)
 
 
 def test_format_cumulative_status_telegram_html_safety_and_cutoff():
@@ -248,6 +258,7 @@ def test_format_cumulative_status_telegram_html_safety_and_cutoff():
     res = format_cumulative_status_telegram(malicious_tools)
     assert "<secret.txt>" not in res
     assert "&lt;secret.txt&gt;" in res
+    assert LOADING_INDICATOR in res
 
     # Test 3500 char cutoff
     long_tools = [
@@ -260,8 +271,10 @@ def test_format_cumulative_status_telegram_html_safety_and_cutoff():
         for i in range(50)
     ]
     long_res = format_cumulative_status_telegram(long_tools)
-    assert len(long_res) <= 3500
+    assert len(long_res) <= 3600
     assert "..." in long_res
+    assert LOADING_INDICATOR in long_res
+    assert long_res.endswith(LOADING_INDICATOR)
 
 
 def test_format_live_progress_panel_telegram_alias():
@@ -269,6 +282,8 @@ def test_format_live_progress_panel_telegram_alias():
     res = format_live_progress_panel_telegram(tools)
     assert "list_dir" in res
     assert "/root" in res
+    assert LOADING_INDICATOR in res
+    assert res.endswith(LOADING_INDICATOR)
 
 
 def test_is_running_and_completed_state_helpers():
@@ -306,4 +321,23 @@ def test_format_cumulative_status_telegram_with_active_and_done_states():
     assert "find_by_name" in res
     assert "*.py in /root" in res
     assert "0.1s" in res or "0.0s" in res
+    assert LOADING_INDICATOR in res
+    assert res.endswith(LOADING_INDICATOR)
+
+
+def test_loading_indicator_absence_in_final_outputs():
+    """Verify loading indicator is NOT present in final stages summary, converted markdown, or stats footers."""
+    tools = [
+        {"tool_name": "view_file", "tool_info": {"TargetFile": "app.py"}, "state": "completed"},
+        {"tool_name": "run_command", "tool_info": {"CommandLine": "pytest"}, "state": "completed"}
+    ]
+    stages_summary = format_execution_stages_telegram(tools)
+    assert LOADING_INDICATOR not in stages_summary
+
+    final_md = markdown_to_telegram_html("## Summary\nAll tests passed successfully!")
+    assert LOADING_INDICATOR not in final_md
+
+    footer = format_stats_footer(1.5, {"total_tokens": 500})
+    assert LOADING_INDICATOR not in footer
+
 

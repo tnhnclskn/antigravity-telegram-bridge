@@ -1096,8 +1096,9 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
         auto_approve = bool(session.get("auto_approve", 1))
 
         # 4. Send initial progress message & start typing background task
+        initial_status = format_cumulative_status_telegram([])
         status_msg = await message.reply_text(
-            "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>",
+            initial_status,
             parse_mode=ParseMode.HTML
         )
 
@@ -1108,7 +1109,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
             message_obj=status_msg,
             interval=settings.STREAM_EDIT_INTERVAL
         )
-        live_updater.last_sent_text = "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>"
+        live_updater.last_sent_text = initial_status
 
         accumulated_response = ""
         final_result_data = None

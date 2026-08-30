@@ -653,6 +653,7 @@ async def test_telegram_live_updater_error_handling_and_fallback():
 async def test_handle_incoming_message_live_streaming_tools_and_final_response(monkeypatch):
     """Test full live streaming updates when tools are executed."""
     from telegram_bot import handle_incoming_message
+    from formatter import LOADING_INDICATOR
     update = create_mock_update(user_id=1020, username="user20", text="Find files and summarize")
     context = MagicMock()
 
@@ -689,13 +690,83 @@ async def test_handle_incoming_message_live_streaming_tools_and_final_response(m
 
     await handle_incoming_message(update, context)
 
-    # Initial status reply was created
+    # Initial status reply was created with LOADING_INDICATOR
     assert update.message.reply_text.call_count >= 2
+    initial_status_text = update.message.reply_text.call_args_list[0][0][0]
+    assert "Düşünülüyor" in initial_status_text
+    assert LOADING_INDICATOR in initial_status_text
+
     # status_msg.edit_text was called during streaming (live progress & stages summary)
     assert status_msg.edit_text.await_count >= 1
-    # Check that final message reply was sent
+
+    # Check intermediate live progress edits contained LOADING_INDICATOR
+    intermediate_calls = [
+        call[0][0] for call in status_msg.edit_text.call_args_list
+        if "Aktif İşlem" in call[0][0] or "Tamamlanan Adımlar" in call[0][0]
+    ]
+    for int_text in intermediate_calls:
+        assert LOADING_INDICATOR in int_text
+
+    # Check that final stages edit does NOT contain LOADING_INDICATOR
+    final_stages_text = status_msg.edit_text.call_args_list[-1][0][0]
+    assert "İşlem Aşamaları" in final_stages_text
+    assert LOADING_INDICATOR not in final_stages_text
+
+    # Check that final message reply was sent and does NOT contain LOADING_INDICATOR
     final_reply_msg_args = update.message.reply_text.call_args_list[-1][0][0]
     assert "Here are your files" in final_reply_msg_args
+    assert LOADING_INDICATOR not in final_reply_msg_args
+
+
+@pytest.mark.asyncio
+async def test_handle_incoming_message_intermediate_loading_indicator_lifecycle(monkeypatch):
+    """Test that intermediate status messages contain loading indicator and final response does not."""
+    from telegram_bot import handle_incoming_message
+    from formatter import LOADING_INDICATOR
+    update = create_mock_update(user_id=1025, username="user25", text="Run analysis")
+    context = MagicMock()
+
+    status_msg = AsyncMock()
+    final_reply_msg = AsyncMock()
+    update.message.reply_text = AsyncMock(side_effect=[status_msg, final_reply_msg])
+
+    async def mock_stream(*args, **kwargs):
+        yield {"type": "init", "conversation_id": "conv-test-lifecycle"}
+        yield {
+            "type": "step_update",
+            "step_type": "tool",
+            "state": "running",
+            "tool_name": "grep_search",
+            "tool_info": {"parameters": {"Query": "import os", "SearchPath": "/root"}}
+        }
+        yield {
+            "type": "result",
+            "conversation_id": "conv-test-lifecycle",
+            "response": "Found 5 occurrences.",
+            "duration_seconds": 1.1
+        }
+
+    monkeypatch.setattr("telegram_bot.agy_client.run_prompt_stream", mock_stream)
+
+    await handle_incoming_message(update, context)
+
+    # Initial message has loading indicator
+    initial_text = update.message.reply_text.call_args_list[0][0][0]
+    assert LOADING_INDICATOR in initial_text
+
+    # Intermediate status update has loading indicator
+    first_edit_text = status_msg.edit_text.call_args_list[0][0][0]
+    assert LOADING_INDICATOR in first_edit_text
+    assert "grep_search" in first_edit_text
+
+    # Final stages edit has NO loading indicator
+    final_stages_edit = status_msg.edit_text.call_args_list[-1][0][0]
+    assert LOADING_INDICATOR not in final_stages_edit
+
+    # Final response reply has NO loading indicator
+    final_reply = update.message.reply_text.call_args_list[-1][0][0]
+    assert LOADING_INDICATOR not in final_reply
+    assert "Found 5 occurrences." in final_reply
 
 
 @pytest.mark.asyncio

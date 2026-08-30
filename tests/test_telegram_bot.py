@@ -451,3 +451,65 @@ async def test_cancel_command_success(monkeypatch):
     reply_text = update.message.reply_text.call_args[0][0]
     assert "Çalışan görev iptal edildi" in reply_text
 
+
+
+@pytest.mark.asyncio
+async def test_bot_commands_list_includes_daily():
+    from telegram_bot import BOT_COMMANDS
+    commands = [c.command for c in BOT_COMMANDS]
+    assert "daily" in commands
+
+@pytest.mark.asyncio
+async def test_build_application_daily_command():
+    from telegram_bot import build_application, settings
+    with patch.object(settings, "TELEGRAM_BOT_TOKEN", "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"), patch.object(settings, "AGY_BIN_PATH", "/bin/sh"):
+        app = build_application()
+        handlers = app.handlers[0]
+        cmd_handlers = [h for h in handlers if hasattr(h, "commands")]
+        registered_cmds = set()
+        for h in cmd_handlers:
+            for c in h.commands:
+                registered_cmds.add(c)
+        assert "daily" in registered_cmds
+
+@pytest.mark.asyncio
+async def test_daily_command_missing_directory(monkeypatch):
+    from telegram_bot import daily_command
+    update = create_mock_update(user_id=1010, username="user10", text="/daily")
+    context = MagicMock()
+    context.args = []
+    
+    # Mock Path to always return False for exists
+    with patch("telegram_bot.Path.exists", return_value=False):
+        await daily_command(update, context)
+        
+    update.message.reply_text.assert_awaited()
+    msg = update.message.reply_text.call_args[0][0]
+    assert "bulunamadı" in msg.lower() or "not found" in msg.lower() or "henüz bir günlük log kaydı" in msg.lower() or "agentic os dizini" in msg.lower()
+
+@pytest.mark.asyncio
+async def test_handle_incoming_media(monkeypatch):
+    from telegram_bot import handle_incoming_message, settings
+    import time
+    update = create_mock_update(user_id=1010, username="user10", text="")
+    context = MagicMock()
+    
+    # mock voice
+    voice_mock = MagicMock()
+    voice_file_mock = AsyncMock()
+    voice_file_mock.file_unique_id = "v123"
+    voice_mock.get_file = AsyncMock(return_value=voice_file_mock)
+    update.message.voice = voice_mock
+    update.message.text = ""
+    update.message.caption = ""
+    update.message.audio = None
+    update.message.document = None
+    update.message.photo = None
+    
+    # mock client
+    monkeypatch.setattr("telegram_bot.agy_client.is_running", lambda uid: False)
+    monkeypatch.setattr("telegram_bot.agy_client.run_prompt_stream", AsyncMock(return_value=None))
+    
+    await handle_incoming_message(update, context)
+    voice_file_mock.download_to_drive.assert_awaited()
+

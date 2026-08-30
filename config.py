@@ -39,6 +39,7 @@ class Settings:
     BASE_DIR: Path = BASE_DIR
     DATA_DIR: Path = BASE_DIR / "data"
     ATTACHMENTS_DIR: Path = DATA_DIR / "attachments"
+    TEMP_MEDIA_DIR: Path = Path(os.getenv("TEMP_MEDIA_DIR", "/tmp/agy_telegram"))
     STATIC_DIR: Path = BASE_DIR / "static"
     TEMPLATES_DIR: Path = BASE_DIR / "templates"
     DB_PATH: Path = DATA_DIR / "bridge.db"
@@ -87,6 +88,7 @@ class Settings:
         """Ensure necessary data directories exist."""
         cls.DATA_DIR.mkdir(parents=True, exist_ok=True)
         cls.ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        cls.TEMP_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
         cls.STATIC_DIR.mkdir(parents=True, exist_ok=True)
         cls.TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 

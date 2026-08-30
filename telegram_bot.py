@@ -63,6 +63,7 @@ BOT_COMMANDS = [
     BotCommand("workspace", "Çalışma dizinini görüntüle veya değiştir"),
     BotCommand("permissions", "Otonom araç izinlerini aç veya kapat"),
     BotCommand("history", "Son sohbet geçmişini göster"),
+    BotCommand("daily", "Agentic OS günlük logları ve aktif konular özeti"),
     BotCommand("whitelist", "İzinli kullanıcıları yönet (admin)"),
 ]
 
@@ -558,6 +559,88 @@ async def permissions_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(f"🛡 <b>Otonom Onay durumu değiştirildi:</b> {state_str}", parse_mode=ParseMode.HTML)
 
 
+
+@authorized_only
+async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Display Agentic OS daily log and active threads summary."""
+    target_msg = update.message or (update.callback_query.message if update.callback_query else None)
+    if not target_msg:
+        return
+
+    args = context.args if context else None
+    target_date = args[0].strip() if (args and len(args) > 0) else None
+
+    # Implement summary fetch logic
+    base_path = Path("/root/Projects/agentic-os")
+    daily_dir = base_path / "daily"
+    threads_file = base_path / "companion" / "Threads.md"
+    
+    if not daily_dir.exists():
+        summary_text = "❌ <b>Agentic OS dizini veya daily/ klasörü bulunamadı.</b>"
+    else:
+        selected_file = None
+        log_date = target_date
+
+        if target_date:
+            candidate = daily_dir / f"{target_date}.md"
+            if candidate.exists():
+                selected_file = candidate
+                log_date = target_date
+        
+        if not selected_file:
+            from datetime import datetime, timezone
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            candidate = daily_dir / f"{today_str}.md"
+            if candidate.exists():
+                selected_file = candidate
+                log_date = today_str
+            else:
+                md_files = sorted([f for f in daily_dir.glob("*.md") if f.name != ".gitkeep"], key=lambda x: x.name, reverse=True)
+                if md_files:
+                    selected_file = md_files[0]
+                    log_date = selected_file.stem
+
+        if not selected_file or not selected_file.exists():
+            summary_text = "ℹ️ <b>Henüz bir günlük log kaydı bulunamadı.</b>"
+        else:
+            try:
+                text_content = selected_file.read_text(encoding="utf-8").strip()
+            except Exception as e:
+                text_content = f"❌ <b>Log dosyası okunamadı:</b> {str(e)}"
+
+            threads_summary = ""
+            if threads_file.exists():
+                try:
+                    threads_content = threads_file.read_text(encoding="utf-8")
+                    active_threads = []
+                    for line in threads_content.splitlines():
+                        if line.startswith("### Thread:"):
+                            active_threads.append(line.replace("### Thread:", "• <b>").strip() + "</b>")
+                        elif line.startswith("**Status:**") and active_threads:
+                            status_part = line.split("|", 1)[0].replace("**Status:**", "").strip()
+                            active_threads[-1] += f" ({escape_html(status_part)})"
+                    if active_threads:
+                        threads_summary = "\n\n🧵 <b>Aktif Konular (Threads):</b>\n" + "\n".join(active_threads[:5])
+                except Exception:
+                    pass
+
+            from formatter import markdown_to_telegram_html
+            formatted_html = markdown_to_telegram_html(text_content)
+            if len(formatted_html) > 3000:
+                formatted_html = formatted_html[:2900] + "\n\n<i>... (kalan kısım kırpıldı)</i>"
+
+            summary_text = f"📅 <b>Agentic OS Günlük Özeti ({escape_html(log_date)})</b>\n\n{formatted_html}{threads_summary}"
+
+    chunks = split_text_chunks(summary_text, max_chars=settings.MAX_TELEGRAM_MESSAGE_LEN)
+    for i, chunk in enumerate(chunks):
+        try:
+            await target_msg.reply_text(chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        except Exception:
+            import re
+            plain = re.sub(r"<[^>]+>", "", chunk)
+            await target_msg.reply_text(plain, disable_web_page_preview=True)
+
+
 @authorized_only
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """View recent message history."""
@@ -730,34 +813,55 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
     # 2. Extract prompt and handle attachments
     prompt_text = message.text or message.caption or ""
     attachment_paths = []
+    ts = int(time.time())
 
     # Handle Photo
     if message.photo:
-        photo = message.photo[-1]  # Highest resolution
+        photo = message.photo[-1]
         file_obj = await photo.get_file()
-        file_ext = ".jpg"
-        ts = int(time.time())
-        dest_file = settings.ATTACHMENTS_DIR / f"photo_{user_id}_{ts}_{file_obj.file_unique_id}{file_ext}"
+        dest_file = settings.TEMP_MEDIA_DIR / f"photo_{user_id}_{ts}_{file_obj.file_unique_id}.jpg"
         await file_obj.download_to_drive(dest_file)
-        attachment_paths.append(str(dest_file))
+        attachment_paths.append(str(dest_file.resolve()))
         logger.info(f"Downloaded photo attachment to {dest_file}")
 
     # Handle Document
     if message.document:
         doc = message.document
         file_obj = await doc.get_file()
-        filename = doc.file_name or f"doc_{int(time.time())}"
-        dest_file = settings.ATTACHMENTS_DIR / f"{user_id}_{filename}"
+        filename = doc.file_name or f"doc_{file_obj.file_unique_id}"
+        dest_file = settings.TEMP_MEDIA_DIR / f"{user_id}_{ts}_{filename}"
         await file_obj.download_to_drive(dest_file)
-        attachment_paths.append(str(dest_file))
+        attachment_paths.append(str(dest_file.resolve()))
         logger.info(f"Downloaded document attachment to {dest_file}")
+
+    # Handle Voice
+    if message.voice:
+        voice = message.voice
+        file_obj = await voice.get_file()
+        dest_file = settings.TEMP_MEDIA_DIR / f"voice_{user_id}_{ts}_{file_obj.file_unique_id}.ogg"
+        await file_obj.download_to_drive(dest_file)
+        attachment_paths.append(str(dest_file.resolve()))
+        logger.info(f"Downloaded voice attachment to {dest_file}")
+
+    # Handle Audio
+    if message.audio:
+        audio = message.audio
+        file_obj = await audio.get_file()
+        filename = audio.file_name or f"audio_{file_obj.file_unique_id}.mp3"
+        dest_file = settings.TEMP_MEDIA_DIR / f"audio_{user_id}_{ts}_{filename}"
+        await file_obj.download_to_drive(dest_file)
+        attachment_paths.append(str(dest_file.resolve()))
+        logger.info(f"Downloaded audio attachment to {dest_file}")
 
     # Construct final prompt with attachment notes if present
     if attachment_paths:
-        attachments_note = "\n".join(f"[Attached File: {p}]" for p in attachment_paths)
+        attachments_note = "\n".join(f"Ekli dosya/medya: {p}" for p in attachment_paths)
         if prompt_text:
             prompt_text = f"{prompt_text}\n\n{attachments_note}"
         else:
+            prompt_text = attachments_note
+
+        if not prompt_text:
             prompt_text = f"Please inspect the attached file(s):\n{attachments_note}"
 
     if not prompt_text.strip():
@@ -952,6 +1056,7 @@ def build_application() -> Application:
     application.add_handler(CommandHandler(["workspace", "cwd", "dir"], workspace_command))
     application.add_handler(CommandHandler(["permissions", "permission", "auto"], permissions_command))
     application.add_handler(CommandHandler("history", history_command))
+    application.add_handler(CommandHandler("daily", daily_command))
     application.add_handler(CommandHandler("whitelist", whitelist_command))
 
     # Interactive UI callbacks
@@ -960,7 +1065,7 @@ def build_application() -> Application:
     # Message & Media handler
     application.add_handler(
         MessageHandler(
-            (filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
+            (filters.TEXT | filters.PHOTO | filters.Document.ALL | filters.VOICE | filters.AUDIO) & ~filters.COMMAND,
             handle_incoming_message
         )
     )

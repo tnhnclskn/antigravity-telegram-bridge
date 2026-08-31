@@ -1,0 +1,1299 @@
+diff --git a/agy_client.py b/agy_client.py
+index 8b06c91..11e5de9 100644
+--- a/agy_client.py
++++ b/agy_client.py
+@@ -26,7 +26,9 @@ class AgyClient:
+         if proc and proc.returncode is None:
+             try:
+                 proc.send_signal(signal.SIGTERM)
+-                logger.info(f"Sent SIGTERM to agy process {proc.pid} for user {user_id}")
++                logger.info(
++                    f"Sent SIGTERM to agy process {proc.pid} for user {user_id}"
++                )
+                 return True
+             except ProcessLookupError:
+                 pass
+@@ -42,7 +44,7 @@ class AgyClient:
+         workspace: Optional[str] = None,
+         model: Optional[str] = None,
+         effort: Optional[str] = None,
+-        auto_approve: bool = True
++        auto_approve: bool = True,
+     ) -> AsyncGenerator[Dict[str, Any], None]:
+         """
+         Execute prompt via `agy` CLI in streaming JSON mode.
+@@ -52,11 +54,7 @@ class AgyClient:
+         if not os.path.isdir(workspace_dir):
+             workspace_dir = "/root"
+ 
+-        cmd = [
+-            self.bin_path,
+-            "--output-format", "stream-json",
+-            "-p", prompt
+-        ]
++        cmd = [self.bin_path, "--output-format", "stream-json", "-p", prompt]
+ 
+         if auto_approve:
+             cmd.append("--dangerously-skip-permissions")
+@@ -73,7 +71,9 @@ class AgyClient:
+         if workspace_dir:
+             cmd.extend(["--add-dir", workspace_dir])
+ 
+-        logger.info(f"Starting agy subprocess for user {user_id}: {' '.join(cmd[:6])}...")
++        logger.info(
++            f"Starting agy subprocess for user {user_id}: {' '.join(cmd[:6])}..."
++        )
+ 
+         try:
+             process = await asyncio.create_subprocess_exec(
+@@ -81,7 +81,7 @@ class AgyClient:
+                 cwd=workspace_dir,
+                 stdout=asyncio.subprocess.PIPE,
+                 stderr=asyncio.subprocess.PIPE,
+-                env=os.environ.copy()
++                env=os.environ.copy(),
+             )
+             self._active_processes[user_id] = process
+ 
+@@ -125,14 +125,14 @@ class AgyClient:
+                     yield {
+                         "type": "init",
+                         "conversation_id": current_conv_id,
+-                        "init": event.get("init", {})
++                        "init": event.get("init", {}),
+                     }
+ 
+                 elif event_type == "step_update":
+                     step_update = event.get("step_update", {})
+                     step_type = step_update.get("step_type")
+                     text_delta = step_update.get("text_delta", "")
+-                    
++
+                     if text_delta:
+                         accumulated_text += text_delta
+ 
+@@ -144,7 +144,7 @@ class AgyClient:
+                         "accumulated_text": accumulated_text,
+                         "tool_name": step_update.get("tool_name"),
+                         "tool_info": step_update.get("tool_info", {}),
+-                        "duration_seconds": step_update.get("duration_seconds")
++                        "duration_seconds": step_update.get("duration_seconds"),
+                     }
+ 
+                 elif event_type == "result":
+@@ -152,35 +152,42 @@ class AgyClient:
+                     final_response = result.get("response", accumulated_text)
+                     yield {
+                         "type": "result",
+-                        "conversation_id": result.get("conversation_id", current_conv_id),
++                        "conversation_id": result.get(
++                            "conversation_id", current_conv_id
++                        ),
+                         "status": result.get("status", "SUCCESS"),
+                         "response": final_response,
+                         "duration_seconds": result.get("duration_seconds", 0.0),
+                         "usage": result.get("usage", {}),
+-                        "num_turns": result.get("num_turns", 1)
++                        "num_turns": result.get("num_turns", 1),
+                     }
+ 
+             await process.wait()
+             await stderr_task
+ 
+             if process.returncode != 0 and process.returncode != -signal.SIGTERM:
+-                error_msg = "\n".join(stderr_output) or f"Process exited with code {process.returncode}"
++                if any("context canceled" in line for line in stderr_output):
++                    logger.info(f"agy process canceled for user {user_id}")
++                    return
++                error_msg = (
++                    "\n".join(stderr_output)
++                    or f"Process exited with code {process.returncode}"
++                )
+                 logger.error(f"agy process failed for user {user_id}: {error_msg}")
+                 yield {
+                     "type": "error",
+                     "error": error_msg,
+-                    "returncode": process.returncode
++                    "returncode": process.returncode,
+                 }
+ 
+         except asyncio.CancelledError:
+             self.cancel_task(user_id)
+             raise
+         except Exception as e:
+-            logger.exception(f"Unexpected exception while running agy for user {user_id}")
+-            yield {
+-                "type": "error",
+-                "error": str(e)
+-            }
++            logger.exception(
++                f"Unexpected exception while running agy for user {user_id}"
++            )
++            yield {"type": "error", "error": str(e)}
+         finally:
+             self._active_processes.pop(user_id, None)
+ 
+@@ -188,10 +195,11 @@ class AgyClient:
+         """Fetch available models from `agy models`."""
+         try:
+             proc = await asyncio.create_subprocess_exec(
+-                self.bin_path, "models",
++                self.bin_path,
++                "models",
+                 stdout=asyncio.subprocess.PIPE,
+                 stderr=asyncio.subprocess.PIPE,
+-                env=os.environ.copy()
++                env=os.environ.copy(),
+             )
+             stdout, _ = await proc.communicate()
+             output = stdout.decode("utf-8", errors="replace")
+@@ -204,7 +212,11 @@ class AgyClient:
+                 parts = line.split()
+                 if parts:
+                     models.append(parts[0])
+-            return models or ["gemini-3.7-flash-high", "gemini-3.1-pro-high", "claude-sonnet-4-6"]
++            return models or [
++                "gemini-3.7-flash-high",
++                "gemini-3.1-pro-high",
++                "claude-sonnet-4-6",
++            ]
+         except Exception as e:
+             logger.error(f"Failed to fetch models: {e}")
+             return ["gemini-3.7-flash-high", "gemini-3.1-pro-high", "claude-sonnet-4-6"]
+diff --git a/config.py b/config.py
+index 012751d..0ca0aa2 100644
+--- a/config.py
++++ b/config.py
+@@ -45,14 +45,13 @@ class Settings:
+     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+     ALLOWED_USER_IDS: List[int] = _get_list_ints("ALLOWED_USER_IDS")
+     ADMIN_USER_IDS: List[int] = _get_list_ints("ADMIN_USER_IDS")
+-    
++
+     # Auto-allow first user as Admin if whitelist is completely empty
+     AUTO_WHITELIST_FIRST_USER: bool = _get_bool("AUTO_WHITELIST_FIRST_USER", True)
+ 
+     # Antigravity CLI Settings
+     AGY_BIN_PATH: str = os.getenv(
+-        "AGY_BIN_PATH",
+-        shutil.which("agy") or "/root/.local/bin/agy"
++        "AGY_BIN_PATH", shutil.which("agy") or "/root/.local/bin/agy"
+     ).strip()
+     DEFAULT_WORKSPACE: str = os.getenv("DEFAULT_WORKSPACE", "/root").strip()
+     DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "gemini-3.7-flash-high").strip()
+@@ -61,7 +60,7 @@ class Settings:
+ 
+     # Streaming and UI
+     STREAM_UPDATES: bool = _get_bool("STREAM_UPDATES", True)
+-    STREAM_EDIT_INTERVAL: float = float(os.getenv("STREAM_EDIT_INTERVAL", "1.5"))
++    STREAM_EDIT_INTERVAL: float = float(os.getenv("STREAM_EDIT_INTERVAL", "0.5"))
+     MAX_TELEGRAM_MESSAGE_LEN: int = 4000  # Safe boundary below 4096
+ 
+     # Logging
+@@ -78,9 +77,13 @@ class Settings:
+         """Validate critical configuration parameters."""
+         cls.ensure_directories()
+         if not cls.TELEGRAM_BOT_TOKEN:
+-            raise ValueError("TELEGRAM_BOT_TOKEN is not set. Please provide a valid bot token in .env")
++            raise ValueError(
++                "TELEGRAM_BOT_TOKEN is not set. Please provide a valid bot token in .env"
++            )
+         if not os.path.isfile(cls.AGY_BIN_PATH) and not shutil.which(cls.AGY_BIN_PATH):
+-            raise FileNotFoundError(f"Antigravity CLI binary not found at: {cls.AGY_BIN_PATH}")
++            raise FileNotFoundError(
++                f"Antigravity CLI binary not found at: {cls.AGY_BIN_PATH}"
++            )
+ 
+ 
+ settings = Settings()
+diff --git a/database.py b/database.py
+index 8569470..eee7dde 100644
+--- a/database.py
++++ b/database.py
+@@ -26,9 +26,10 @@ class Database:
+         settings.ensure_directories()
+         async with aiosqlite.connect(self.db_path) as db:
+             await db.execute("PRAGMA journal_mode=WAL;")
+-            
++
+             # User sessions table
+-            await db.execute("""
++            await db.execute(
++                """
+                 CREATE TABLE IF NOT EXISTS user_sessions (
+                     user_id INTEGER PRIMARY KEY,
+                     chat_id INTEGER,
+@@ -40,10 +41,12 @@ class Database:
+                     created_at TEXT,
+                     updated_at TEXT
+                 )
+-            """)
++            """
++            )
+ 
+             # Message history table
+-            await db.execute("""
++            await db.execute(
++                """
+                 CREATE TABLE IF NOT EXISTS message_history (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     user_id INTEGER,
+@@ -52,10 +55,12 @@ class Database:
+                     content TEXT,
+                     timestamp TEXT
+                 )
+-            """)
++            """
++            )
+ 
+             # Whitelisted users table
+-            await db.execute("""
++            await db.execute(
++                """
+                 CREATE TABLE IF NOT EXISTS whitelisted_users (
+                     user_id INTEGER PRIMARY KEY,
+                     username TEXT,
+@@ -63,21 +68,28 @@ class Database:
+                     role TEXT DEFAULT 'user',
+                     created_at TEXT
+                 )
+-            """)
++            """
++            )
+ 
+             # Pre-populate whitelist from settings if provided
+             for uid in settings.ALLOWED_USER_IDS:
+-                await db.execute("""
++                await db.execute(
++                    """
+                     INSERT OR IGNORE INTO whitelisted_users (user_id, role, created_at)
+                     VALUES (?, 'user', ?)
+-                """, (uid, _utc_now_str()))
++                """,
++                    (uid, _utc_now_str()),
++                )
+ 
+             for uid in settings.ADMIN_USER_IDS:
+-                await db.execute("""
++                await db.execute(
++                    """
+                     INSERT INTO whitelisted_users (user_id, role, created_at)
+                     VALUES (?, 'admin', ?)
+                     ON CONFLICT(user_id) DO UPDATE SET role='admin'
+-                """, (uid, _utc_now_str()))
++                """,
++                    (uid, _utc_now_str()),
++                )
+ 
+             await db.commit()
+         logger.info(f"Database initialized at {self.db_path}")
+@@ -96,7 +108,9 @@ class Database:
+             if total_users == 0 and settings.AUTO_WHITELIST_FIRST_USER:
+                 return True
+ 
+-            async with db.execute("SELECT 1 FROM whitelisted_users WHERE user_id = ?", (user_id,)) as cursor:
++            async with db.execute(
++                "SELECT 1 FROM whitelisted_users WHERE user_id = ?", (user_id,)
++            ) as cursor:
+                 return (await cursor.fetchone()) is not None
+ 
+     async def is_admin(self, user_id: int) -> bool:
+@@ -104,32 +118,46 @@ class Database:
+         if user_id in settings.ADMIN_USER_IDS:
+             return True
+         async with aiosqlite.connect(self.db_path) as db:
+-            async with db.execute("SELECT role FROM whitelisted_users WHERE user_id = ?", (user_id,)) as cursor:
++            async with db.execute(
++                "SELECT role FROM whitelisted_users WHERE user_id = ?", (user_id,)
++            ) as cursor:
+                 row = await cursor.fetchone()
+                 return row is not None and row[0] == "admin"
+ 
+-    async def add_whitelisted_user(self, user_id: int, username: Optional[str] = None,
+-                                   full_name: Optional[str] = None, role: str = "user"):
++    async def add_whitelisted_user(
++        self,
++        user_id: int,
++        username: Optional[str] = None,
++        full_name: Optional[str] = None,
++        role: str = "user",
++    ):
+         async with aiosqlite.connect(self.db_path) as db:
+-            await db.execute("""
++            await db.execute(
++                """
+                 INSERT INTO whitelisted_users (user_id, username, full_name, role, created_at)
+                 VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT(user_id) DO UPDATE SET
+                     username = COALESCE(excluded.username, whitelisted_users.username),
+                     full_name = COALESCE(excluded.full_name, whitelisted_users.full_name),
+                     role = excluded.role
+-            """, (user_id, username, full_name, role, _utc_now_str()))
++            """,
++                (user_id, username, full_name, role, _utc_now_str()),
++            )
+             await db.commit()
+ 
+     async def remove_whitelisted_user(self, user_id: int):
+         async with aiosqlite.connect(self.db_path) as db:
+-            await db.execute("DELETE FROM whitelisted_users WHERE user_id = ?", (user_id,))
++            await db.execute(
++                "DELETE FROM whitelisted_users WHERE user_id = ?", (user_id,)
++            )
+             await db.commit()
+ 
+     async def get_whitelisted_users(self) -> List[Dict[str, Any]]:
+         async with aiosqlite.connect(self.db_path) as db:
+             db.row_factory = aiosqlite.Row
+-            async with db.execute("SELECT * FROM whitelisted_users ORDER BY created_at ASC") as cursor:
++            async with db.execute(
++                "SELECT * FROM whitelisted_users ORDER BY created_at ASC"
++            ) as cursor:
+                 rows = await cursor.fetchall()
+                 return [dict(r) for r in rows]
+ 
+@@ -155,15 +183,20 @@ class Database:
+                 "workspace": settings.DEFAULT_WORKSPACE,
+                 "auto_approve": 1 if settings.AUTO_APPROVE_PERMISSIONS else 0,
+                 "created_at": now,
+-                "updated_at": now
++                "updated_at": now,
+             }
+-            await db.execute("""
++            await db.execute(
++                """
+                 INSERT OR IGNORE INTO user_sessions (user_id, chat_id, conversation_id, model, effort, workspace, auto_approve, created_at, updated_at)
+                 VALUES (:user_id, :chat_id, :conversation_id, :model, :effort, :workspace, :auto_approve, :created_at, :updated_at)
+-            """, default_session)
++            """,
++                default_session,
++            )
+             await db.commit()
+ 
+-            async with db.execute("SELECT * FROM user_sessions WHERE user_id = ?", (user_id,)) as cursor:
++            async with db.execute(
++                "SELECT * FROM user_sessions WHERE user_id = ?", (user_id,)
++            ) as cursor:
+                 row = await cursor.fetchone()
+                 return dict(row) if row else default_session
+ 
+@@ -176,41 +209,54 @@ class Database:
+         kwargs["user_id"] = user_id
+ 
+         async with aiosqlite.connect(self.db_path) as db:
+-            await db.execute(f"UPDATE user_sessions SET {fields} WHERE user_id = :user_id", kwargs)
++            await db.execute(
++                f"UPDATE user_sessions SET {fields} WHERE user_id = :user_id", kwargs
++            )
+             await db.commit()
+ 
+     async def reset_session(self, user_id: int) -> str:
+         """Reset conversation ID to start a fresh Antigravity session."""
+         now = _utc_now_str()
+         async with aiosqlite.connect(self.db_path) as db:
+-            await db.execute("""
++            await db.execute(
++                """
+                 UPDATE user_sessions
+                 SET conversation_id = NULL, updated_at = ?
+                 WHERE user_id = ?
+-            """, (now, user_id))
++            """,
++                (now, user_id),
++            )
+             await db.commit()
+         return "Session reset"
+ 
+     # ---------------- Message History ---------------- #
+ 
+-    async def add_history(self, user_id: int, conversation_id: Optional[str], role: str, content: str):
++    async def add_history(
++        self, user_id: int, conversation_id: Optional[str], role: str, content: str
++    ):
+         now = _utc_now_str()
+         async with aiosqlite.connect(self.db_path) as db:
+-            await db.execute("""
++            await db.execute(
++                """
+                 INSERT INTO message_history (user_id, conversation_id, role, content, timestamp)
+                 VALUES (?, ?, ?, ?, ?)
+-            """, (user_id, conversation_id, role, content, now))
++            """,
++                (user_id, conversation_id, role, content, now),
++            )
+             await db.commit()
+ 
+     async def get_history(self, user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+         async with aiosqlite.connect(self.db_path) as db:
+             db.row_factory = aiosqlite.Row
+-            async with db.execute("""
++            async with db.execute(
++                """
+                 SELECT * FROM message_history
+                 WHERE user_id = ?
+                 ORDER BY id DESC
+                 LIMIT ?
+-            """, (user_id, limit)) as cursor:
++            """,
++                (user_id, limit),
++            ) as cursor:
+                 rows = await cursor.fetchall()
+                 return [dict(r) for r in reversed(rows)]
+ 
+diff --git a/formatter.py b/formatter.py
+index 1ccde6f..1537db1 100644
+--- a/formatter.py
++++ b/formatter.py
+@@ -5,6 +5,7 @@ Converts Markdown to clean, safe Telegram HTML and splits long responses.
+ 
+ import re
+ import html
++import time
+ from typing import List, Optional
+ 
+ 
+@@ -34,11 +35,16 @@ def markdown_to_telegram_html(md_text: str) -> str:
+         if lang:
+             tag = f'<pre><code class="language-{escape_html(lang)}">{escaped_code}</code></pre>'
+         else:
+-            tag = f'<pre>{escaped_code}</pre>'
++            tag = f"<pre>{escaped_code}</pre>"
+         code_blocks.append(tag)
+         return f"\x02CB{index}\x03"
+ 
+-    text = re.sub(r"```([a-zA-Z0-9_\-\+\.#]*)\n?(.*?)```", save_code_block, md_text, flags=re.DOTALL)
++    text = re.sub(
++        r"```([a-zA-Z0-9_\-\+\.#]*)\n?(.*?)```",
++        save_code_block,
++        md_text,
++        flags=re.DOTALL,
++    )
+ 
+     # 2. Extract inline code (`code`)
+     def save_inline_code(match):
+@@ -82,7 +88,9 @@ def markdown_to_telegram_html(md_text: str) -> str:
+         clean_quote = "\n".join(lines).strip()
+         return f"<blockquote>{clean_quote}</blockquote>"
+ 
+-    text = re.sub(r"(?:^&gt;.*(?:\n|$))+", replace_blockquotes, text, flags=re.MULTILINE)
++    text = re.sub(
++        r"(?:^&gt;.*(?:\n|$))+", replace_blockquotes, text, flags=re.MULTILINE
++    )
+ 
+     # 10. Restore inline codes
+     for idx, inline_html in enumerate(inline_codes):
+@@ -121,9 +129,13 @@ def split_text_chunks(text: str, max_chars: int = 3800) -> List[str]:
+             if current:
+                 # If currently inside a <pre> block, close it for this chunk
+                 if in_pre:
+-                    current += "\n</code></pre>" if "</code" in current and "<code" in current else "\n</pre>"
++                    current += (
++                        "\n</code></pre>"
++                        if "</code" in current and "<code" in current
++                        else "\n</pre>"
++                    )
+                 chunks.append(current)
+-                
++
+                 # Start new chunk
+                 if in_pre:
+                     current = f"{pre_tag}\n{line}"
+@@ -174,22 +186,34 @@ def format_tool_status(tool_name: str, tool_args: dict, state: str = "running")
+         "ask_question": "❓",
+     }
+     icon = icons.get(tool_name, "⚙️")
+-    
++
++    # Time-based CLI spinner
++    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
++    frame = frames[int(time.time() * 2) % len(frames)]
++
+     arg_summary = ""
+     if tool_name == "run_command" and "CommandLine" in tool_args:
+-        arg_summary = f": <code>{escape_html(str(tool_args['CommandLine'])[:80])}</code>"
+-    elif tool_name in ("view_file", "write_to_file", "replace_file_content") and "TargetFile" in tool_args:
++        arg_summary = (
++            f":\n<pre>{escape_html(str(tool_args['CommandLine'])[:80])}</pre>"
++        )
++    elif (
++        tool_name in ("view_file", "write_to_file", "replace_file_content")
++        and "TargetFile" in tool_args
++    ):
+         arg_summary = f": <code>{escape_html(str(tool_args['TargetFile'])[:60])}</code>"
+     elif tool_name in ("view_file", "write_to_file") and "AbsolutePath" in tool_args:
+-        arg_summary = f": <code>{escape_html(str(tool_args['AbsolutePath'])[:60])}</code>"
++        arg_summary = (
++            f": <code>{escape_html(str(tool_args['AbsolutePath'])[:60])}</code>"
++        )
+     elif tool_name == "search_web" and "query" in tool_args:
+         arg_summary = f": <i>{escape_html(str(tool_args['query'])[:60])}</i>"
+-    
++
+     if state == "running":
+-        return f"{icon} <b>Çalıştırılıyor:</b> <code>{escape_html(tool_name)}</code>{arg_summary}..."
++        return f"<code>[ {frame} ]</code> {icon} <b>Çalıştırılıyor:</b> <code>{escape_html(tool_name)}</code>{arg_summary}"
+     else:
+-        return f"✅ <b>Tamamlandı:</b> <code>{escape_html(tool_name)}</code>{arg_summary}"
+-
++        return (
++            f"<code>[ ✔ ]</code> {icon} <b>Tamamlandı:</b> <code>{escape_html(tool_name)}</code>{arg_summary}"
++        )
+ 
+ def format_stats_footer(duration: float, usage: Optional[dict] = None) -> str:
+     """Format footer with latency and token usage statistics."""
+@@ -201,4 +225,6 @@ def format_stats_footer(duration: float, usage: Optional[dict] = None) -> str:
+             parts.append(f"📊 {total:,} tokens")
+         if thinking:
+             parts.append(f"🧠 {thinking:,} reasoning")
+-    return " | ".join(parts)
++            
++    inner = " | ".join(parts)
++    return f"<code>[❯_] {inner}</code>"
+diff --git a/main.py b/main.py
+index 317a0e0..2f2b614 100644
+--- a/main.py
++++ b/main.py
+@@ -15,7 +15,7 @@ from telegram_bot import build_application
+ logging.basicConfig(
+     format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+     datefmt="%Y-%m-%d %H:%M:%S",
+-    level=getattr(logging, settings.LOG_LEVEL, logging.INFO)
++    level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
+ )
+ logger = logging.getLogger("antigravity_bridge")
+ 
+@@ -38,9 +38,11 @@ async def main():
+     # 3. Setup lifecycle and polling
+     await app.initialize()
+     await app.start()
+-    
++
+     bot_info = await app.bot.get_me()
+-    logger.info(f"Bot successfully authenticated as @{bot_info.username} (ID: {bot_info.id})")
++    logger.info(
++        f"Bot successfully authenticated as @{bot_info.username} (ID: {bot_info.id})"
++    )
+     logger.info("Starting update poller...")
+ 
+     await app.updater.start_polling(allowed_updates=["message", "callback_query"])
+diff --git a/telegram_bot.py b/telegram_bot.py
+index 411efc7..9ab2d46 100644
+--- a/telegram_bot.py
++++ b/telegram_bot.py
+@@ -12,12 +12,7 @@ from datetime import datetime, timezone
+ from pathlib import Path
+ from typing import Optional, Dict, Any, List
+ 
+-from telegram import (
+-    Update,
+-    InlineKeyboardButton,
+-    InlineKeyboardMarkup,
+-    constants
+-)
++from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants
+ from telegram.constants import ParseMode, ChatAction
+ from telegram.ext import (
+     Application,
+@@ -25,7 +20,7 @@ from telegram.ext import (
+     MessageHandler,
+     CallbackQueryHandler,
+     ContextTypes,
+-    filters
++    filters,
+ )
+ 
+ from config import settings
+@@ -36,7 +31,7 @@ from formatter import (
+     split_text_chunks,
+     format_tool_status,
+     format_stats_footer,
+-    escape_html
++    escape_html,
+ )
+ 
+ logger = logging.getLogger(__name__)
+@@ -44,9 +39,13 @@ logger = logging.getLogger(__name__)
+ 
+ # ---------------- Security & Auth Decorator ---------------- #
+ 
++
+ def authorized_only(func):
+     """Decorator to ensure only whitelisted users can use bot features."""
+-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
++
++    async def wrapper(
++        update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs
++    ):
+         user = update.effective_user
+         if not user:
+             return
+@@ -56,18 +55,26 @@ def authorized_only(func):
+ 
+         # Check if first user auto-whitelisting is triggered
+         total_whitelisted = await db.count_whitelisted_users()
+-        if not is_allowed and total_whitelisted == 0 and settings.AUTO_WHITELIST_FIRST_USER:
++        if (
++            not is_allowed
++            and total_whitelisted == 0
++            and settings.AUTO_WHITELIST_FIRST_USER
++        ):
+             await db.add_whitelisted_user(
+                 user_id=user_id,
+                 username=user.username,
+                 full_name=user.full_name,
+-                role="admin"
++                role="admin",
+             )
+             is_allowed = True
+-            logger.info(f"Auto-whitelisted first user {user_id} (@{user.username}) as Admin.")
++            logger.info(
++                f"Auto-whitelisted first user {user_id} (@{user.username}) as Admin."
++            )
+ 
+         if not is_allowed:
+-            logger.warning(f"Unauthorized access attempt from User ID: {user_id} (@{user.username})")
++            logger.warning(
++                f"Unauthorized access attempt from User ID: {user_id} (@{user.username})"
++            )
+             if update.message:
+                 denied_msg = (
+                     "⛔ <b>Yetkisiz Erişim</b>\n\n"
+@@ -79,11 +86,13 @@ def authorized_only(func):
+             return
+ 
+         return await func(update, context, *args, **kwargs)
++
+     return wrapper
+ 
+ 
+ # ---------------- Command Handlers ---------------- #
+ 
++
+ @authorized_only
+ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     """Handle /start command."""
+@@ -119,15 +128,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+             InlineKeyboardButton("🧠 Model Seç", callback_data="cmd_models"),
+             InlineKeyboardButton("🎯 Düşünme Seviyesi", callback_data="cmd_efforts"),
+         ],
+-        [
+-            InlineKeyboardButton("📖 Yardım & Komutlar", callback_data="cmd_help")
+-        ]
++        [InlineKeyboardButton("📖 Yardım & Komutlar", callback_data="cmd_help")],
+     ]
+ 
+     await update.message.reply_text(
+         welcome_text,
+         parse_mode=ParseMode.HTML,
+-        reply_markup=InlineKeyboardMarkup(keyboard)
++        reply_markup=InlineKeyboardMarkup(keyboard),
+     )
+ 
+ 
+@@ -156,7 +163,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     if update.message:
+         await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
+     elif update.callback_query:
+-        await update.callback_query.message.reply_text(help_text, parse_mode=ParseMode.HTML)
++        await update.callback_query.message.reply_text(
++            help_text, parse_mode=ParseMode.HTML
++        )
+ 
+ 
+ @authorized_only
+@@ -178,9 +187,13 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     user = update.effective_user
+     cancelled = agy_client.cancel_task(user.id)
+     if cancelled:
+-        await update.message.reply_text("🛑 <b>Çalışan görev iptal edildi.</b>", parse_mode=ParseMode.HTML)
++        await update.message.reply_text(
++            "🛑 <b>Çalışan görev iptal edildi.</b>", parse_mode=ParseMode.HTML
++        )
+     else:
+-        await update.message.reply_text("ℹ️ Şu anda çalışan aktif bir görev bulunmuyor.", parse_mode=ParseMode.HTML)
++        await update.message.reply_text(
++            "ℹ️ Şu anda çalışan aktif bir görev bulunmuyor.", parse_mode=ParseMode.HTML
++        )
+ 
+ 
+ @authorized_only
+@@ -220,9 +233,17 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     ]
+ 
+     if update.message:
+-        await update.message.reply_text(status_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
++        await update.message.reply_text(
++            status_text,
++            parse_mode=ParseMode.HTML,
++            reply_markup=InlineKeyboardMarkup(keyboard),
++        )
+     elif update.callback_query:
+-        await update.callback_query.message.reply_text(status_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
++        await update.callback_query.message.reply_text(
++            status_text,
++            parse_mode=ParseMode.HTML,
++            reply_markup=InlineKeyboardMarkup(keyboard),
++        )
+ 
+ 
+ @authorized_only
+@@ -236,7 +257,7 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+         await db.update_session(user.id, model=new_model)
+         await update.message.reply_text(
+             f"✅ <b>Model değiştirildi:</b> <code>{escape_html(new_model)}</code>",
+-            parse_mode=ParseMode.HTML
++            parse_mode=ParseMode.HTML,
+         )
+         return
+ 
+@@ -248,10 +269,14 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     keyboard = []
+     for m in models:
+         prefix = "✅ " if m == current_model else ""
+-        keyboard.append([InlineKeyboardButton(f"{prefix}{m}", callback_data=f"set_model:{m}")])
++        keyboard.append(
++            [InlineKeyboardButton(f"{prefix}{m}", callback_data=f"set_model:{m}")]
++        )
+ 
+     text = f"🤖 <b>Kullanılabilir Modeller</b>\nŞu anki model: <code>{escape_html(current_model)}</code>\n\nAşağıdan seçim yapabilirsiniz:"
+-    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
++    await update.message.reply_text(
++        text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard)
++    )
+ 
+ 
+ @authorized_only
+@@ -263,26 +288,45 @@ async def effort_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     if args:
+         new_effort = args[0].strip().lower()
+         if new_effort not in ("low", "medium", "high"):
+-            await update.message.reply_text("❌ Geçersiz seviye. Seçenekler: <code>low</code>, <code>medium</code>, <code>high</code>", parse_mode=ParseMode.HTML)
++            await update.message.reply_text(
++                "❌ Geçersiz seviye. Seçenekler: <code>low</code>, <code>medium</code>, <code>high</code>",
++                parse_mode=ParseMode.HTML,
++            )
+             return
+         await db.update_session(user.id, effort=new_effort)
+-        await update.message.reply_text(f"✅ <b>Düşünme seviyesi ayarlandı:</b> <code>{new_effort}</code>", parse_mode=ParseMode.HTML)
++        await update.message.reply_text(
++            f"✅ <b>Düşünme seviyesi ayarlandı:</b> <code>{new_effort}</code>",
++            parse_mode=ParseMode.HTML,
++        )
+         return
+ 
+     session = await db.get_session(user.id)
+     current = session.get("effort", settings.DEFAULT_EFFORT)
+     keyboard = [
+         [
+-            InlineKeyboardButton(f"{'✅ ' if current == 'high' else ''}High (Derin Akıl Yürütme)", callback_data="set_effort:high"),
++            InlineKeyboardButton(
++                f"{'✅ ' if current == 'high' else ''}High (Derin Akıl Yürütme)",
++                callback_data="set_effort:high",
++            ),
+         ],
+         [
+-            InlineKeyboardButton(f"{'✅ ' if current == 'medium' else ''}Medium (Dengeli)", callback_data="set_effort:medium"),
++            InlineKeyboardButton(
++                f"{'✅ ' if current == 'medium' else ''}Medium (Dengeli)",
++                callback_data="set_effort:medium",
++            ),
+         ],
+         [
+-            InlineKeyboardButton(f"{'✅ ' if current == 'low' else ''}Low (Hızlı)", callback_data="set_effort:low"),
+-        ]
++            InlineKeyboardButton(
++                f"{'✅ ' if current == 'low' else ''}Low (Hızlı)",
++                callback_data="set_effort:low",
++            ),
++        ],
+     ]
+-    await update.message.reply_text("🎯 <b>Düşünme Seviyesi (Reasoning Effort) Seçin:</b>", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
++    await update.message.reply_text(
++        "🎯 <b>Düşünme Seviyesi (Reasoning Effort) Seçin:</b>",
++        parse_mode=ParseMode.HTML,
++        reply_markup=InlineKeyboardMarkup(keyboard),
++    )
+ 
+ 
+ @authorized_only
+@@ -294,10 +338,16 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     if args:
+         target_dir = os.path.abspath(args[0].strip())
+         if not os.path.isdir(target_dir):
+-            await update.message.reply_text(f"❌ Dizin bulunamadı: <code>{escape_html(target_dir)}</code>", parse_mode=ParseMode.HTML)
++            await update.message.reply_text(
++                f"❌ Dizin bulunamadı: <code>{escape_html(target_dir)}</code>",
++                parse_mode=ParseMode.HTML,
++            )
+             return
+         await db.update_session(user.id, workspace=target_dir)
+-        await update.message.reply_text(f"✅ <b>Çalışma dizini güncellendi:</b> <code>{escape_html(target_dir)}</code>", parse_mode=ParseMode.HTML)
++        await update.message.reply_text(
++            f"✅ <b>Çalışma dizini güncellendi:</b> <code>{escape_html(target_dir)}</code>",
++            parse_mode=ParseMode.HTML,
++        )
+         return
+ 
+     session = await db.get_session(user.id)
+@@ -305,7 +355,7 @@ async def workspace_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     await update.message.reply_text(
+         f"📂 <b>Mevcut Çalışma Alanı:</b> <code>{escape_html(current_ws)}</code>\n\n"
+         f"Değiştirmek için: <code>/workspace &lt;dizin_yolu&gt;</code>",
+-        parse_mode=ParseMode.HTML
++        parse_mode=ParseMode.HTML,
+     )
+ 
+ 
+@@ -322,14 +372,19 @@ async def permissions_command(update: Update, context: ContextTypes.DEFAULT_TYPE
+         val = args[0].lower() in ("on", "1", "true", "evet", "acik", "açık")
+         await db.update_session(user.id, auto_approve=1 if val else 0)
+         state_str = "Açık (Otonom Araç Çalıştırma)" if val else "Kapalı"
+-        await update.message.reply_text(f"🛡 <b>Otonom Onay:</b> {state_str}", parse_mode=ParseMode.HTML)
++        await update.message.reply_text(
++            f"🛡 <b>Otonom Onay:</b> {state_str}", parse_mode=ParseMode.HTML
++        )
+         return
+ 
+     # Toggle
+     new_val = not current
+     await db.update_session(user.id, auto_approve=1 if new_val else 0)
+     state_str = "Açık (Otonom Araç Çalıştırma)" if new_val else "Kapalı"
+-    await update.message.reply_text(f"🛡 <b>Otonom Onay durumu değiştirildi:</b> {state_str}", parse_mode=ParseMode.HTML)
++    await update.message.reply_text(
++        f"🛡 <b>Otonom Onay durumu değiştirildi:</b> {state_str}",
++        parse_mode=ParseMode.HTML,
++    )
+ 
+ 
+ @authorized_only
+@@ -338,12 +393,16 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     user = update.effective_user
+     history = await db.get_history(user.id, limit=6)
+     if not history:
+-        await update.message.reply_text("📜 Henüz bir sohbet geçmişi kaydedilmemiş.", parse_mode=ParseMode.HTML)
++        await update.message.reply_text(
++            "📜 Henüz bir sohbet geçmişi kaydedilmemiş.", parse_mode=ParseMode.HTML
++        )
+         return
+ 
+     lines = ["📜 <b>Son Sohbet Geçmişi:</b>\n"]
+     for item in history:
+-        role_icon = "👤 <b>Siz:</b>" if item["role"] == "user" else "🤖 <b>Yaver AI:</b>"
++        role_icon = (
++            "👤 <b>Siz:</b>" if item["role"] == "user" else "🤖 <b>Yaver AI:</b>"
++        )
+         snippet = item["content"][:120].replace("\n", " ")
+         if len(item["content"]) > 120:
+             snippet += "..."
+@@ -357,7 +416,10 @@ async def whitelist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     """Admin whitelist management."""
+     user = update.effective_user
+     if not await db.is_admin(user.id):
+-        await update.message.reply_text("⛔ Bu komutu sadece bot yöneticileri kullanabilir.", parse_mode=ParseMode.HTML)
++        await update.message.reply_text(
++            "⛔ Bu komutu sadece bot yöneticileri kullanabilir.",
++            parse_mode=ParseMode.HTML,
++        )
+         return
+ 
+     args = context.args
+@@ -367,7 +429,9 @@ async def whitelist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+         for u in users:
+             admin_badge = "👑 Admin" if u.get("role") == "admin" else "👤 Kullanıcı"
+             name = u.get("full_name") or u.get("username") or "Bilinmiyor"
+-            msg_lines.append(f"• <code>{u['user_id']}</code> - {escape_html(name)} ({admin_badge})")
++            msg_lines.append(
++                f"• <code>{u['user_id']}</code> - {escape_html(name)} ({admin_badge})"
++            )
+         await update.message.reply_text("\n".join(msg_lines), parse_mode=ParseMode.HTML)
+         return
+ 
+@@ -376,29 +440,42 @@ async def whitelist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+         try:
+             target_id = int(args[1])
+             target_name = args[2] if len(args) > 2 else None
+-            await db.add_whitelisted_user(target_id, full_name=target_name, added_by=user.id)
+-            await update.message.reply_text(f"✅ Kullanıcı <code>{target_id}</code> izin listesine eklendi.", parse_mode=ParseMode.HTML)
++            await db.add_whitelisted_user(
++                target_id, full_name=target_name, added_by=user.id
++            )
++            await update.message.reply_text(
++                f"✅ Kullanıcı <code>{target_id}</code> izin listesine eklendi.",
++                parse_mode=ParseMode.HTML,
++            )
+         except ValueError:
+-            await update.message.reply_text("❌ Geçersiz kullanıcı ID'si.", parse_mode=ParseMode.HTML)
++            await update.message.reply_text(
++                "❌ Geçersiz kullanıcı ID'si.", parse_mode=ParseMode.HTML
++            )
+     elif action == "remove" and len(args) >= 2:
+         try:
+             target_id = int(args[1])
+             await db.remove_whitelisted_user(target_id)
+-            await update.message.reply_text(f"🗑 Kullanıcı <code>{target_id}</code> listeden çıkarıldı.", parse_mode=ParseMode.HTML)
++            await update.message.reply_text(
++                f"🗑 Kullanıcı <code>{target_id}</code> listeden çıkarıldı.",
++                parse_mode=ParseMode.HTML,
++            )
+         except ValueError:
+-            await update.message.reply_text("❌ Geçersiz kullanıcı ID'si.", parse_mode=ParseMode.HTML)
++            await update.message.reply_text(
++                "❌ Geçersiz kullanıcı ID'si.", parse_mode=ParseMode.HTML
++            )
+     else:
+         await update.message.reply_text(
+             "ℹ️ <b>Kullanım:</b>\n"
+             "• <code>/whitelist list</code>\n"
+             "• <code>/whitelist add &lt;id&gt; [isim]</code>\n"
+             "• <code>/whitelist remove &lt;id&gt;</code>",
+-            parse_mode=ParseMode.HTML
++            parse_mode=ParseMode.HTML,
+         )
+ 
+ 
+ # ---------------- Callback Queries ---------------- #
+ 
++
+ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     """Handle interactive inline keyboard clicks."""
+     query = update.callback_query
+@@ -414,7 +491,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     data = query.data or ""
+     if data == "cmd_new":
+         await db.reset_session(user_id)
+-        await query.edit_message_text("🔄 <b>Yeni oturum başlatıldı!</b>", parse_mode=ParseMode.HTML)
++        await query.edit_message_text(
++            "🔄 <b>Yeni oturum başlatıldı!</b>", parse_mode=ParseMode.HTML
++        )
+     elif data == "cmd_status":
+         await status_command(update, context)
+     elif data == "cmd_help":
+@@ -423,29 +502,67 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+         models = await agy_client.get_available_models()
+         session = await db.get_session(user_id)
+         current = session.get("model", settings.DEFAULT_MODEL)
+-        kb = [[InlineKeyboardButton(f"{'✅ ' if m == current else ''}{m}", callback_data=f"set_model:{m}")] for m in models]
+-        await query.message.reply_text("🤖 <b>Model Seçin:</b>", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
++        kb = [
++            [
++                InlineKeyboardButton(
++                    f"{'✅ ' if m == current else ''}{m}",
++                    callback_data=f"set_model:{m}",
++                )
++            ]
++            for m in models
++        ]
++        await query.message.reply_text(
++            "🤖 <b>Model Seçin:</b>",
++            parse_mode=ParseMode.HTML,
++            reply_markup=InlineKeyboardMarkup(kb),
++        )
+     elif data == "cmd_efforts":
+         session = await db.get_session(user_id)
+         current = session.get("effort", settings.DEFAULT_EFFORT)
+         kb = [
+-            [InlineKeyboardButton(f"{'✅ ' if current == 'high' else ''}High (Derin Akıl Yürütme)", callback_data="set_effort:high")],
+-            [InlineKeyboardButton(f"{'✅ ' if current == 'medium' else ''}Medium (Dengeli)", callback_data="set_effort:medium")],
+-            [InlineKeyboardButton(f"{'✅ ' if current == 'low' else ''}Low (Hızlı)", callback_data="set_effort:low")]
++            [
++                InlineKeyboardButton(
++                    f"{'✅ ' if current == 'high' else ''}High (Derin Akıl Yürütme)",
++                    callback_data="set_effort:high",
++                )
++            ],
++            [
++                InlineKeyboardButton(
++                    f"{'✅ ' if current == 'medium' else ''}Medium (Dengeli)",
++                    callback_data="set_effort:medium",
++                )
++            ],
++            [
++                InlineKeyboardButton(
++                    f"{'✅ ' if current == 'low' else ''}Low (Hızlı)",
++                    callback_data="set_effort:low",
++                )
++            ],
+         ]
+-        await query.message.reply_text("🎯 <b>Düşünme Seviyesi Seçin:</b>", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
++        await query.message.reply_text(
++            "🎯 <b>Düşünme Seviyesi Seçin:</b>",
++            parse_mode=ParseMode.HTML,
++            reply_markup=InlineKeyboardMarkup(kb),
++        )
+     elif data.startswith("set_model:"):
+         model_name = data.split(":", 1)[1]
+         await db.update_session(user_id, model=model_name)
+-        await query.edit_message_text(f"✅ <b>Model güncellendi:</b> <code>{escape_html(model_name)}</code>", parse_mode=ParseMode.HTML)
++        await query.edit_message_text(
++            f"✅ <b>Model güncellendi:</b> <code>{escape_html(model_name)}</code>",
++            parse_mode=ParseMode.HTML,
++        )
+     elif data.startswith("set_effort:"):
+         effort_name = data.split(":", 1)[1]
+         await db.update_session(user_id, effort=effort_name)
+-        await query.edit_message_text(f"✅ <b>Düşünme seviyesi güncellendi:</b> <code>{escape_html(effort_name)}</code>", parse_mode=ParseMode.HTML)
++        await query.edit_message_text(
++            f"✅ <b>Düşünme seviyesi güncellendi:</b> <code>{escape_html(effort_name)}</code>",
++            parse_mode=ParseMode.HTML,
++        )
+ 
+ 
+ # ---------------- Message & Media Handler ---------------- #
+ 
++
+ async def send_typing_periodically(chat_id: int, bot, stop_event: asyncio.Event):
+     """Send typing chat action every 4 seconds until stop_event is set."""
+     while not stop_event.is_set():
+@@ -480,7 +597,10 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
+         file_obj = await photo.get_file()
+         file_ext = ".jpg"
+         ts = int(time.time())
+-        dest_file = settings.ATTACHMENTS_DIR / f"photo_{user_id}_{ts}_{file_obj.file_unique_id}{file_ext}"
++        dest_file = (
++            settings.ATTACHMENTS_DIR
++            / f"photo_{user_id}_{ts}_{file_obj.file_unique_id}{file_ext}"
++        )
+         await file_obj.download_to_drive(dest_file)
+         attachment_paths.append(str(dest_file))
+         logger.info(f"Downloaded photo attachment to {dest_file}")
+@@ -517,12 +637,13 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
+ 
+     # 3. Send initial progress message & start typing background task
+     status_msg = await message.reply_text(
+-        "🧠 <i>Düşünülüyor ve hazırlanıyor...</i>",
+-        parse_mode=ParseMode.HTML
++        "<code>[ ⠋ ] Başlatılıyor...</code>", parse_mode=ParseMode.HTML
+     )
+ 
+     stop_typing = asyncio.Event()
+-    typing_task = asyncio.create_task(send_typing_periodically(chat_id, context.bot, stop_typing))
++    typing_task = asyncio.create_task(
++        send_typing_periodically(chat_id, context.bot, stop_typing)
++    )
+ 
+     last_edit_time = time.time()
+     last_status_text = ""
+@@ -538,7 +659,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
+             workspace=workspace,
+             model=model,
+             effort=effort,
+-            auto_approve=auto_approve
++            auto_approve=auto_approve,
+         ):
+             event_type = event.get("type")
+ 
+@@ -556,12 +677,17 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
+                 if tool_name:
+                     tool_args = event.get("tool_info", {}).get("parameters", {})
+                     current_status = format_tool_status(tool_name, tool_args, state)
+-                    
++
+                     # Update status message with debouncing
+                     now = time.time()
+-                    if current_status != last_status_text and (now - last_edit_time) >= settings.STREAM_EDIT_INTERVAL:
++                    if (
++                        current_status != last_status_text
++                        and (now - last_edit_time) >= settings.STREAM_EDIT_INTERVAL
++                    ):
+                         try:
+-                            await status_msg.edit_text(current_status, parse_mode=ParseMode.HTML)
++                            await status_msg.edit_text(
++                                current_status, parse_mode=ParseMode.HTML
++                            )
+                             last_status_text = current_status
+                             last_edit_time = now
+                         except Exception:
+@@ -577,11 +703,15 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
+ 
+             elif event_type == "error":
+                 err_text = event.get("error", "Bilinmeyen hata")
+-                accumulated_response = f"⚠️ <b>Hata:</b>\n<code>{escape_html(err_text)}</code>"
++                accumulated_response = (
++                    f"⚠️ <b>Hata:</b>\n<code>{escape_html(err_text)}</code>"
++                )
+ 
+     except Exception as e:
+         logger.exception(f"Error processing prompt for user {user_id}")
+-        accumulated_response = f"❌ <b>Bir hata oluştu:</b>\n<code>{escape_html(str(e))}</code>"
++        accumulated_response = (
++            f"❌ <b>Bir hata oluştu:</b>\n<code>{escape_html(str(e))}</code>"
++        )
+     finally:
+         stop_typing.set()
+         await typing_task
+@@ -602,21 +732,31 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
+         duration = final_result_data.get("duration_seconds", 0.0)
+         usage = final_result_data.get("usage")
+         footer = format_stats_footer(duration, usage)
+-        formatted_html += f"\n\n<blockquote>{escape_html(footer)}</blockquote>"
++        formatted_html += f"\n\n{footer}"
+ 
+     # Split into message chunks safe for Telegram (<= 3800 chars)
+-    chunks = split_text_chunks(formatted_html, max_chars=settings.MAX_TELEGRAM_MESSAGE_LEN)
++    chunks = split_text_chunks(
++        formatted_html, max_chars=settings.MAX_TELEGRAM_MESSAGE_LEN
++    )
+ 
+     # Send or edit first chunk
+     try:
+         if chunks:
+-            await status_msg.edit_text(chunks[0], parse_mode=ParseMode.HTML, disable_web_page_preview=True)
++            await status_msg.edit_text(
++                chunks[0], parse_mode=ParseMode.HTML, disable_web_page_preview=True
++            )
+             for subsequent_chunk in chunks[1:]:
+-                await message.reply_text(subsequent_chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
++                await message.reply_text(
++                    subsequent_chunk,
++                    parse_mode=ParseMode.HTML,
++                    disable_web_page_preview=True,
++                )
+     except Exception as e:
+         logger.warning(f"HTML send failed, falling back to plain text: {e}")
+         # Fallback to plain text if HTML parsing failed
+-        plain_chunks = split_text_chunks(accumulated_response, max_chars=settings.MAX_TELEGRAM_MESSAGE_LEN)
++        plain_chunks = split_text_chunks(
++            accumulated_response, max_chars=settings.MAX_TELEGRAM_MESSAGE_LEN
++        )
+         try:
+             await status_msg.edit_text(plain_chunks[0])
+             for ch in plain_chunks[1:]:
+@@ -627,6 +767,7 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
+ 
+ # ---------------- Application Setup ---------------- #
+ 
++
+ def build_application() -> Application:
+     """Build and configure the Telegram Application."""
+     settings.validate()
+@@ -641,13 +782,19 @@ def build_application() -> Application:
+     # Command handlers
+     application.add_handler(CommandHandler("start", start_command))
+     application.add_handler(CommandHandler("help", help_command))
+-    application.add_handler(CommandHandler(["new", "reset", "clear"], new_session_command))
++    application.add_handler(
++        CommandHandler(["new", "reset", "clear"], new_session_command)
++    )
+     application.add_handler(CommandHandler(["cancel", "stop"], cancel_command))
+     application.add_handler(CommandHandler("status", status_command))
+     application.add_handler(CommandHandler("model", model_command))
+     application.add_handler(CommandHandler("effort", effort_command))
+-    application.add_handler(CommandHandler(["workspace", "cwd", "dir"], workspace_command))
+-    application.add_handler(CommandHandler(["permissions", "permission", "auto"], permissions_command))
++    application.add_handler(
++        CommandHandler(["workspace", "cwd", "dir"], workspace_command)
++    )
++    application.add_handler(
++        CommandHandler(["permissions", "permission", "auto"], permissions_command)
++    )
+     application.add_handler(CommandHandler("history", history_command))
+     application.add_handler(CommandHandler("whitelist", whitelist_command))
+ 
+@@ -658,7 +805,7 @@ def build_application() -> Application:
+     application.add_handler(
+         MessageHandler(
+             (filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
+-            handle_incoming_message
++            handle_incoming_message,
+         )
+     )
+ 
+diff --git a/tests/test_database.py b/tests/test_database.py
+index 64ed211..11c47b4 100644
+--- a/tests/test_database.py
++++ b/tests/test_database.py
+@@ -17,7 +17,9 @@ async def test_database_init_and_session(tmp_path: Path):
+     assert session["conversation_id"] is None
+ 
+     # Update session
+-    await test_db.update_session(user_id=12345, conversation_id="uuid-abc-123", model="gemini-3.7-flash-high")
++    await test_db.update_session(
++        user_id=12345, conversation_id="uuid-abc-123", model="gemini-3.7-flash-high"
++    )
+     updated = await test_db.get_session(user_id=12345)
+     assert updated["conversation_id"] == "uuid-abc-123"
+     assert updated["model"] == "gemini-3.7-flash-high"
+@@ -44,8 +46,7 @@ async def test_database_whitelist_and_admin(tmp_path: Path):
+ 
+     # Remove user
+     await test_db.remove_whitelisted_user(user_id=999)
+-    # List is now empty
+-    assert await test_db.count_whitelisted_users() == 0
++    assert await test_db.is_whitelisted(user_id=999) is False
+ 
+ 
+ @pytest.mark.asyncio
+@@ -54,8 +55,12 @@ async def test_database_message_history(tmp_path: Path):
+     test_db = Database(db_path=db_file)
+     await test_db.init()
+ 
+-    await test_db.add_history(user_id=100, conversation_id="conv-1", role="user", content="Hello")
+-    await test_db.add_history(user_id=100, conversation_id="conv-1", role="assistant", content="Hi there!")
++    await test_db.add_history(
++        user_id=100, conversation_id="conv-1", role="user", content="Hello"
++    )
++    await test_db.add_history(
++        user_id=100, conversation_id="conv-1", role="assistant", content="Hi there!"
++    )
+ 
+     history = await test_db.get_history(user_id=100, limit=10)
+     assert len(history) == 2
+diff --git a/tests/test_formatter.py b/tests/test_formatter.py
+index e619656..e087a23 100644
+--- a/tests/test_formatter.py
++++ b/tests/test_formatter.py
+@@ -4,7 +4,7 @@ from formatter import (
+     markdown_to_telegram_html,
+     split_text_chunks,
+     format_tool_status,
+-    format_stats_footer
++    format_stats_footer,
+ )
+ 
+ 
+@@ -24,7 +24,10 @@ def test_markdown_to_telegram_html_basic():
+ def test_markdown_to_telegram_html_code_block():
+     md = "Code:\n```python\ndef foo():\n    return 42\n```"
+     res = markdown_to_telegram_html(md)
+-    assert '<pre><code class="language-python">def foo():\n    return 42</code></pre>' in res
++    assert (
++        '<pre><code class="language-python">def foo():\n    return 42</code></pre>'
++        in res
++    )
+ 
+ 
+ def test_markdown_to_telegram_html_nested_tags():
+@@ -42,7 +45,12 @@ def test_split_text_chunks_small():
+ 
+ 
+ def test_split_text_chunks_long():
+-    text = "\n".join([f"Line {i}: Some detailed content for testing paragraph splitting" for i in range(100)])
++    text = "\n".join(
++        [
++            f"Line {i}: Some detailed content for testing paragraph splitting"
++            for i in range(100)
++        ]
++    )
+     chunks = split_text_chunks(text, max_chars=300)
+     assert len(chunks) > 1
+     for ch in chunks:
+@@ -51,7 +59,7 @@ def test_split_text_chunks_long():
+ 
+ def test_split_text_chunks_preserves_pre_tags():
+     code_lines = "\n".join([f"x_{i} = {i} * 2" for i in range(50)])
+-    text = f"<pre><code class=\"language-python\">\n{code_lines}\n</code></pre>"
++    text = f'<pre><code class="language-python">\n{code_lines}\n</code></pre>'
+     chunks = split_text_chunks(text, max_chars=200)
+     assert len(chunks) > 1
+     # Check that chunks close opened pre tags
+@@ -61,7 +69,9 @@ def test_split_text_chunks_preserves_pre_tags():
+ 
+ 
+ def test_format_tool_status():
+-    status = format_tool_status("run_command", {"CommandLine": "ls -la /root"}, state="running")
++    status = format_tool_status(
++        "run_command", {"CommandLine": "ls -la /root"}, state="running"
++    )
+     assert "⚡" in status
+     assert "run_command" in status
+     assert "ls -la /root" in status
